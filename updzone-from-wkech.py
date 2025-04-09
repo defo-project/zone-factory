@@ -14,6 +14,7 @@ import certifi
 import dns.name
 import dns.resolver
 import dns.message
+import dns.zonefile
 import httptools
 
 
@@ -379,16 +380,19 @@ def check_wkech(url, regeninterval=3600, target=None): # TODO: work out what typ
         logging.warning(f"Unable to retrieve data from {wkurl}")
     logging.debug(f"Data retrieved from {wkurl}: {rectified}")
 
-    rrset = wkech_to_HTTPS_rrset(svcbname, rectified)
-    logging.debug(f"WIP: Generated RRset: {rrset}")
+    if rectified:
+        rrset = wkech_to_HTTPS_rrset(svcbname, rectified)
+        if rrset[0] == chain[0].rrset:
+            logging.info(f"Generated RRset differs from published one")
+            logging.info(f"Generated RRset: {rrset[0]}")
+            logging.info(f"Published RRset: {chain[0].rrset}")
+        else:
+            logging.info(f"WIP: Generated RRset matches published one")
 
-    for x in (
-            "Compare generated and actual RRset; skip to DONE if no difference",
-            "validate WKECH data; skip to FAIL if error",
-            "generate DNS UPDATE transaction",
-            "apply DNS UPDATE transaction"
-            ):
-        logging.debug(f"TODO: {x}")
+        for x in [
+                "validate WKECH data; skip to FAIL if error"
+        ]:
+            logging.debug(f"TODO: {x}")
 
     # Left-overs from earlier work may be relevant: keep for now ...
     #         loaded['endpoints'] = aliased
@@ -456,14 +460,15 @@ def rdata_from_params(ep: dict) -> str:
 
 def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict):
     rrset = []
+    if not wkechdata:
+        return []
     ttl = int(wkechdata['regeninterval'] / 2 if 'regeninterval' in wkechdata else 1800)
-    dnsclass = 'IN'
     dnstype = 'HTTPS'
     for endpoint in wkechdata['endpoints']:
         if 'alias' in endpoint:
             priority = 0
             target = endpoint['alias']
-            rr = f"{hostname} {ttl} {dnsclass} {dnstype} {priority} {target}"
+            rr = f"{dns.name.from_text(hostname)} {ttl} {dnstype} {priority} {target}"
             logging.debug(f"RR generated from WKECH: {rr}")
             rrset.append(rr)
         else:
@@ -474,12 +479,13 @@ def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict):
             for tag, val in params.items():
                 if tag in ('ipv4hint', 'ipv6hint'):
                     svcparams.append(f"{tag}={','.join(val)}")
+                # TODO: Add further special handling as needed (ALPN?, MANDATORY, ...)
                 else:
                     svcparams.append(f"{tag}={val}")
-            rr = f"{hostname} {ttl} {dnsclass} {dnstype} {priority} {target} {' '.join(svcparams)}"
+            rr = f"{dns.name.from_text(hostname)} {ttl} {dnstype} {priority} {target} {' '.join(svcparams)}"
             logging.debug(f"RR generated from WKECH: {rr}")
             rrset.append(rr)
-    return rrset
+    return dns.zonefile.read_rrsets('\n'.join(rrset))
 
 
 def prepare_update(url, target=None):
