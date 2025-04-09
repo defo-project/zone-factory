@@ -13,6 +13,7 @@ from urllib.parse import ParseResult
 import certifi
 import dns.name
 import dns.resolver
+import dns.message
 import httptools
 
 
@@ -108,34 +109,30 @@ def svcbname(parsed: ParseResult):
         return None
 
 
-# def get_ech_configs(domain) -> List[bytes]:
-#     # TODO: refactor following new pyclient.py, which returns a Tuple
-#     try:
-#         answers = dns.resolver.resolve(domain, "HTTPS")
-#     except dns.resolver.NoAnswer:
-#         logging.warning(f"No HTTPS record found for {domain}")
-#         return []
-#     except Exception as e:
-#         logging.critical(f"DNS query failed: {e}")
-#         sys.exit(1)
-
-#     configs = []
-
-#     for rdata in answers:
-#         if hasattr(rdata, "params"):
-#             params = rdata.params
-#             echconfig = params.get(5)
-#             if echconfig:
-#                 configs.append(echconfig.ech)
-
-#     if len(configs) == 0:
-#         logging.warning(f"No echconfig found in HTTPS record for {domain}")
-
-#     return configs
-
-def get_ech_configs(domain, follow_alias: bool = True) -> Tuple[Optional[str], List[bytes]]:
+def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, depth = 8
+                    ) -> List[Optional[dns.resolver.Answer]]:
+    result: list[Optional[dns.resolver.Answer]] = []
     try:
-        answers = dns.resolver.resolve(domain, "HTTPS")
+        ans = dns.resolver.resolve(domain, "HTTPS")
+    except dns.resolver.NoAnswer:
+        logging.warning(f"No HTTPS record found for {domain}")
+    except Exception as e:
+        logging.critical(f"DNS query failed: {e}")
+        return result + [None]
+    result = [ans]
+    rrs = list(filter(lambda a: a.rdtype == 65, ans))
+    if len(rrs):
+        rrs.sort(key=lambda a: a.priority)
+        if rrs[0].priority == 0:
+            result +=  get_https_rrchain(rrs[0].target, follow_alias=(depth>0), depth=depth-1)
+    return result
+
+
+def get_ech_configs(domain, follow_alias: bool = True, depth = 0) -> Tuple[Optional[str], List[bytes]]:
+    """Look up HTTPS record, following aliases as needed"""
+    maxdepth = 8                # Arbitrary constant
+    try:
+        ans = dns.resolver.resolve(domain, "HTTPS")
     except dns.resolver.NoAnswer:
         logging.warning(f"No HTTPS record found for {domain}")
         return None, []
@@ -143,27 +140,33 @@ def get_ech_configs(domain, follow_alias: bool = True) -> Tuple[Optional[str], L
         logging.critical(f"DNS query failed: {e}")
         sys.exit(1)
 
-    answers = list(filter(lambda a: a.rdtype == 65, answers))
+    rrs = list(filter(lambda a: a.rdtype == 65, ans))
 
-    if len(answers) == 0:
+    if len(rrs) == 0:
         logging.warning(f"No echconfig found in HTTPS record for {domain}")
         return None, []
 
-    answers.sort(key=lambda a: a.priority)
-    if answers[0].priority == 0:
-        logging.debug(f"HTTPS record using AliasMode (0). Looking instead at {answers[0].target}")
-        return get_ech_configs(answers[0].target.to_text(True), False)
+    rrs.sort(key=lambda a: a.priority)
+    if rrs[0].priority == 0:
+        if depth > maxdepth:
+            logging.critical(f"Alias recursion depth {depth} exceeds limit {maxdepth}")
+            sys.exit(1)
+        logging.debug(f"HTTPS record using AliasMode (0). Looking instead at {rrs[0].target}")
+        return get_ech_configs(rrs[0].target.to_text(True), False, depth=depth+1)
 
     configs = []
 
-    for rdata in answers:
+    for rdata in rrs:
         if hasattr(rdata, "params"):
             params = rdata.params
             echconfig = params.get(5)
             if echconfig:
                 configs.append(echconfig.ech)
 
-    return None if follow_alias else domain, configs
+    if follow_alias:
+        return None, []
+
+    return domain, configs
 
 
 class ECHresult(TypedDict):
@@ -183,7 +186,7 @@ class WKECHdata(TypedDict):
 
 
 def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, target=None) -> ECHresult:
-    logging.debug(f"Accessing service providing https://{hostname}:{port}/")
+    logging.debug(f"Accessing service providing 'https://{hostname}:{port}/' with target '{target}'")
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.load_verify_locations(certifi.where())
     context.options |= ssl.OP_ECH_GREASE
@@ -194,7 +197,6 @@ def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, 
         except ssl.SSLError as e:
             logging.error(f"SSL error for {hostname}:{port} -- {e}")
             pass
-    logging.debug(f"Target is {target} and hostname is {hostname}:{port}")
     try:
         with socket.create_connection((target or hostname, port)) as sock:
             with context.wrap_socket(sock, server_hostname=hostname, do_handshake_on_connect=False) as ssock:
@@ -214,7 +216,7 @@ def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, 
 
                 response = b''
                 if path != None:
-                    logging.debug(f"Performing GET request for https://{hostname}:{port}/{path}")
+                    logging.debug(f"Performing GET request for https://{hostname}:{port}{path}")
                     request = f'GET {path} HTTP/1.1\r\nHost: {hostname}\r\nConnection: close\r\n\r\n'
                     ssock.sendall(request.encode('utf-8'))
                     while True:
@@ -229,6 +231,7 @@ def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, 
 
 
 def get_http(hostname, port, path, ech_configs, target=None) -> bytes:
+    logging.debug(f"Getting HTTP data from 'https://{hostname}:{port}{path}' with target '{target}'")
     return access_origin(hostname, port, path=path, ech_configs=ech_configs, target=target)["response"]
 
 
@@ -237,13 +240,17 @@ def probe_ech(hostname, port, path, ech_configs, target=None):
 
 
 def get(url: str, force_grease: bool=False, target: Optional[str]=None):
+    logging.debug(f"Getting data for URL '{url}' with target '{target}'")
     parsed = urllib.parse.urlparse(url)
     domain = parsed.hostname
     if force_grease:
         alias, ech_configs = None, []
     else:
+        # chain = get_https_rrchain(svcbname(parsed))
+        # logging.debug(f"HTTPS RRset(s): {list(map(lambda x: x.rrset, chain))}")
         alias, ech_configs = get_ech_configs(svcbname(parsed))
     target = target or alias
+    logging.debug(f"  target now set to '{target}'")
     logging.debug("Discovered ECHConfig values: %s", [base64.b64encode(config) for config in ech_configs])
     request_path = (parsed.path or '/') + ('?' + parsed.query if parsed.query else '')
     raw = get_http(domain, parsed.port or 443, request_path, ech_configs, target)
@@ -283,7 +290,6 @@ def get_wkech(url, target=None):
     logging.debug(f"Fetching WKECH data for url {url}")
     parsed = urllib.parse.urlparse(url)
     wkurl = f"{parsed.scheme}://{parsed.netloc}/.well-known/origin-svcb"
-    # response = get(f"{parsed.scheme}://{target or parsed.netloc}/.well-known/origin-svcb")
     response = get(wkurl, target=target)
     if response['status_code'] == 200: # or could test 'reason' for 'OK'
         rectified = rectify(json.loads(response['body']))
@@ -316,22 +322,75 @@ def get_aliased_wkech(wkech, scheme='https'):
 
 
 def check_wkech(url, regeninterval=3600, target=None): # TODO: work out what type to return
+    """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
+    loaded = None               # default return value (see TODO above)
+    alias = None
+    ech_configs = []
     scheme = urllib.parse.urlparse(url).scheme
+    if scheme not in ("http", "https"):
+        logging.warning(f"Scheme '{scheme}' not supported")
+        return None
+
     hostname = urllib.parse.urlparse(url).hostname
     port = urllib.parse.urlparse(url).port
-    if not port or port == 80:
+    if not port or port in (443, 80):
         port = 443
-    loaded = get_wkech(url, target=target)
+    wkurl = f"{scheme}://{hostname}:{port}/.well-known/svcb-origin"
+    svcbname = hostname if port == 443 else f"_{port}._HTTPS.{hostname}"
+    chain = get_https_rrchain(svcbname)
+    depth = len(chain)
+    #
+    # Notes:
+    #  - First RRset in chain is to be compared to WKECH data
+    #  - Last RRset in chain is only one relevant for ECHConfig validation
+    #  - After successful validation, first RRset is to be updated
+    #    unless it matches WKECH data
+    #
+    if depth == 0:              # No HTTPS record found
+        logging.warning(f"No HTTPS record found for '{svcbname}'")
+    else:                       # Chain of AliasMode HTTPS RRsets
+        if depth > 1:
+            logging.debug(f"HTTPS RRset chain (depth {depth}) found for '{svcbname}'")
+        focus = chain[-1].rrset
+        rrs = list(filter(lambda a: a.rdtype == 65, focus))
+        rrs.sort(key=lambda a: a.priority)
+        select_rr = rrs[0]
+        if select_rr.priority == 0:
+            logging.warning(f"HTTPS RRset chain for '{svcbname}' has unresolved AliasMode RRset")
+        else:
+            logging.debug(f"HTTPS RRset chain for '{svcbname}' ends with a ServiceMode RRset")
+            echparam = select_rr.params.get(5)
+            if echparam:
+                ech_configs.append(echparam.ech)
+            alias = str(select_rr.target)
+            if alias == '.':
+                alias = None if depth == 1 else str(focus.name)
+        
+    logging.debug(f"Using alias '{alias}', "
+                  f"echconfigs {list(map(lambda x: base64.b64encode(x).decode('utf-8'), ech_configs))}")
 
-    # TODO: finish refactoring needed because alias handling was wrong
+    response = parse_http_response(get_http(hostname, port, "/.well-known/origin-svcb", ech_configs, alias))
+    if response['status_code'] == 200: # or could test 'reason' for 'OK'
+        rectified = rectify(json.loads(response['body']))
+        if not rectified:
+            logging.warning(f"Data retrieved from {wkurl} is invalid")
+    else:
+        rectified = None
+        logging.warning(f"Unable to retrieve data from {wkurl}")
+    logging.debug(f"Data retrieved from {wkurl}: {rectified}")
 
-    if loaded:
-        for endpoint in loaded['endpoints']: # visit each endpoint
-            endpoint['_OK_'] = False         # until we know better
-            if 'alias' in endpoint:
-                pass                
+    rrset = wkech_to_HTTPS_rrset(svcbname, rectified)
+    logging.debug(f"WIP: Generated RRset: {rrset}")
 
+    for x in (
+            "Compare generated and actual RRset; skip to DONE if no difference",
+            "validate WKECH data; skip to FAIL if error",
+            "generate DNS UPDATE transaction",
+            "apply DNS UPDATE transaction"
+            ):
+        logging.debug(f"TODO: {x}")
 
+    # Left-overs from earlier work may be relevant: keep for now ...
     #         loaded['endpoints'] = aliased
     #         for endpoint in aliased:
     #             logging.debug(f"Checking endpoint {endpoint}")
@@ -395,6 +454,34 @@ def rdata_from_params(ep: dict) -> str:
             pass
     return rdata
 
+def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict):
+    rrset = []
+    ttl = int(wkechdata['regeninterval'] / 2 if 'regeninterval' in wkechdata else 1800)
+    dnsclass = 'IN'
+    dnstype = 'HTTPS'
+    for endpoint in wkechdata['endpoints']:
+        if 'alias' in endpoint:
+            priority = 0
+            target = endpoint['alias']
+            rr = f"{hostname} {ttl} {dnsclass} {dnstype} {priority} {target}"
+            logging.debug(f"RR generated from WKECH: {rr}")
+            rrset.append(rr)
+        else:
+            svcparams = []
+            priority = endpoint['priority'] if 'priority' in endpoint else 1
+            target = endpoint['target'] if 'target' in endpoint else '.'
+            params = endpoint['params']
+            for tag, val in params.items():
+                if tag in ('ipv4hint', 'ipv6hint'):
+                    svcparams.append(f"{tag}={','.join(val)}")
+                else:
+                    svcparams.append(f"{tag}={val}")
+            rr = f"{hostname} {ttl} {dnsclass} {dnstype} {priority} {target} {' '.join(svcparams)}"
+            logging.debug(f"RR generated from WKECH: {rr}")
+            rrset.append(rr)
+    return rrset
+
+
 def prepare_update(url, target=None):
     updcmds = []
     endpoints = []
@@ -440,8 +527,8 @@ def cmd_get(args) -> None:
 def cmd_echconfig(args) -> None:
     """Print the bas64-encoded ECHConfig values for a given URL."""
     parsed = urllib.parse.urlparse(args.url)
-    # TODO: review and possibly refactor for get_ech_configs() from new pyclient.py
-    for config in get_ech_configs(svcbname(parsed)):
+    alias, configs = get_ech_configs(svcbname(parsed))
+    for config in configs:
         print(base64.b64encode(config).decode("utf-8"))
 
 
