@@ -322,15 +322,18 @@ def get_aliased_wkech(wkech, scheme='https'):
     return result
 
 
-def check_wkech(url, regeninterval=3600, target=None): # TODO: work out what type to return
+def check_wkech(url, regeninterval=3600, target=None) -> dict:
     """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
-    loaded = None               # default return value (see TODO above)
+    result = {
+        'OK': False,            # until we know better
+        'Update': []            # List of RRsets to update
+    }                           # return value
     alias = None
     ech_configs = []
     scheme = urllib.parse.urlparse(url).scheme
     if scheme not in ("http", "https"):
         logging.warning(f"Scheme '{scheme}' not supported")
-        return None
+        return result
 
     hostname = urllib.parse.urlparse(url).hostname
     port = urllib.parse.urlparse(url).port
@@ -373,75 +376,57 @@ def check_wkech(url, regeninterval=3600, target=None): # TODO: work out what typ
     response = parse_http_response(get_http(hostname, port, "/.well-known/origin-svcb", ech_configs, alias))
     if response['status_code'] == 200: # or could test 'reason' for 'OK'
         rectified = rectify(json.loads(response['body']))
-        if not rectified:
-            logging.warning(f"Data retrieved from {wkurl} is invalid")
     else:
         rectified = None
         logging.warning(f"Unable to retrieve data from {wkurl}")
-    logging.debug(f"Data retrieved from {wkurl}: {rectified}")
 
-    if rectified:
+    if not rectified:
+        logging.warning(f"Data retrieved from {wkurl} is invalid")
+    else:
+        logging.debug(f"Data retrieved from {wkurl}: {rectified}")
         rrset = wkech_to_HTTPS_rrset(svcbname, rectified)
-        if rrset[0] == chain[0].rrset:
+        if rrset[0] != chain[0].rrset:
             logging.info(f"Generated RRset differs from published one")
             logging.info(f"Generated RRset: {rrset[0]}")
             logging.info(f"Published RRset: {chain[0].rrset}")
+
+            logging.debug(f"TODO: validate WKECH data; skip to FAIL if error")
+
+            bad_endpoints = 0   # none seen yet
+            for endpoint in rectified['endpoints']:
+                endpoint['_OK_'] = False # until we know better
+                if 'params' not in endpoint or 'ech' not in endpoint['params']:
+                    # nothing to validate
+                    endpoint['_OK_'] = True
+                    continue
+
+                conflist = ECHConfigList(endpoint['params']['ech'])
+                configs = conflist.analyze() # break out individual configs from ECHConfigList
+                cfcount = len(configs)
+                cftally = 0
+                bad_configs = 0
+                for echconfig in configs:
+                    # Visit target using just this config
+                    cftally += 1
+                    echstatus = probe_ech(hostname, port, None, ech_configs=[echconfig], target=target)
+                    logging.debug(f"Result from probing with ECHConfig {cftally}/{cfcount}: {echstatus.name}")
+                    if echstatus != ssl.ECH_STATUS_SUCCESS:
+                        bad_configs += 1
+                    # Next echconfig
+                if bad_configs:
+                    bad_endpoints += 1
+                else:
+                    endpoint['_OK_'] = True
+                # Next endpoint
+            if bad_endpoints == 0:
+                result['OK'] = True
+                result['Update'] = rrset[:1]
+            
         else:
-            logging.info(f"WIP: Generated RRset matches published one")
+            logging.debug(f"WIP: Generated RRset matches published one")
+            result['OK'] = True
 
-        for x in [
-                "validate WKECH data; skip to FAIL if error"
-        ]:
-            logging.debug(f"TODO: {x}")
-
-    # Left-overs from earlier work may be relevant: keep for now ...
-    #         loaded['endpoints'] = aliased
-    #         for endpoint in aliased:
-    #             logging.debug(f"Checking endpoint {endpoint}")
-    #             endpoint['_OK_'] = False
-    #             checked = check_wkech(
-    #                 f"{scheme}://{endpoint['alias']}/", regeninterval=regeninterval, target=aliased[0]['alias'])
-    #             if list(filter(lambda x: x['_OK_'] == True, checked['endpoints'])):
-    #                 endpoint['_OK_'] = True
-                
-    #         return loaded
-                                   
-    #     epcount = len(loaded['endpoints'])
-    #     eptally = 0
-    #     epvalid = 0
-    #     for endpoint in loaded['endpoints']:
-    #         eptally += 1
-    #         endpoint['_OK_'] = False # until we know better
-    #         params = endpoint['params']
-    #         # TODO: 
-    #         if 'ech' not in params:
-    #             logging.warning(f"Endpoint {eptally}/{epcount} has no ECHConfigList parameter: marking it 'OK'")
-    #             endpoint['_OK_'] = True # or None?
-    #         else:
-    #             badconfigs = []
-    #             successcount = 0
-    #             conflist = ECHConfigList(params['ech'])
-    #             configs = conflist.analyze() # break out individual configs from ECHConfigList
-    #             cfcount = len(configs)
-    #             cftally = 0
-    #             logging.debug(f"Endpoint {eptally}/{epcount} has an ECHConfigList with {cfcount} entries")
-    #             for echconfig in configs:
-    #                 # Visit target using just this config
-    #                 cftally += 1
-    #                 echstatus = probe_ech(hostname, port, None, ech_configs=[echconfig], target=target)
-    #                 logging.debug(f"Result from probing with ECHConfig {cftally}/{cfcount}: {echstatus.name}")
-    #                 if echstatus == ssl.ECH_STATUS_SUCCESS:
-    #                     successcount += 1
-    #                 else:
-    #                     badconfigs.append(config)
-    #             if successcount == len(configs):
-    #                 endpoint['_OK_'] = True
-    #                 epvalid += 1
-    #             else:
-    #                 logging.warning(f"ECHConfigList for endpoint {eptally}/{epcount} has only {successcount}/{cfcount} valid ECHConfigs")
-    #     if target and epvalid:
-    #         return {"endpoints": [{"alias": target, "params": {}, "_OK_": True}], "regeninterval": regeninterval}
-    return loaded
+    return result
 
 
 def rdata_from_params(ep: dict) -> str:
@@ -613,9 +598,11 @@ def cmd_fetch(args) -> None:
 def cmd_check_wkech(args) -> None:
     """ Retrieve data from WKECH URL and validate each ECHConfig found """
     checked = check_wkech(args.url, target=args.alias)
-    if checked:
-        print(json.dumps(checked))
-    logging.warning("This subcommand is not yet fully implemented")
+    if checked['OK']:
+        logging.info(f"Validation succeeded")
+        logging.info(f"Number of updates needed: {len(checked['Update'])}")
+        if checked['Update']:
+            print(checked['Update'])
 
 
 def cmd_prepare_update(args) -> None:
