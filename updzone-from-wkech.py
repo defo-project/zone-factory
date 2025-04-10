@@ -11,9 +11,11 @@ from typing import List, OrderedDict, TypedDict, NotRequired, Union, Tuple, Sequ
 from urllib.parse import ParseResult
 
 import certifi
-import dns.name
-import dns.resolver
 import dns.message
+import dns.name
+import dns.rdataclass
+import dns.rdatatype
+import dns.resolver
 import dns.zonefile
 import httptools
 
@@ -386,11 +388,9 @@ def check_wkech(url, regeninterval=3600, target=None) -> dict:
         logging.debug(f"Data retrieved from {wkurl}: {rectified}")
         rrset = wkech_to_HTTPS_rrset(svcbname, rectified)
         if rrset[0] != chain[0].rrset:
-            logging.info(f"Generated RRset differs from published one")
-            logging.info(f"Generated RRset: {rrset[0]}")
-            logging.info(f"Published RRset: {chain[0].rrset}")
-
-            logging.debug(f"TODO: validate WKECH data; skip to FAIL if error")
+            logging.debug(f"Generated RRset differs from published one")
+            logging.debug(f"Generated RRset: {rrset[0]}")
+            logging.debug(f"Published RRset: {chain[0].rrset}")
 
             bad_endpoints = 0   # none seen yet
             for endpoint in rectified['endpoints']:
@@ -443,6 +443,7 @@ def rdata_from_params(ep: dict) -> str:
             pass
     return rdata
 
+
 def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict):
     rrset = []
     if not wkechdata:
@@ -474,40 +475,22 @@ def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict):
 
 
 def prepare_update(url, target=None):
-    updcmds = []
-    endpoints = []
-    parsed = urllib.parse.urlparse(url)
-    ownername = dns.name.from_text(svcbname(parsed)).canonicalize()
+    result = []
     checked = check_wkech(url, target=target)
-    if checked:
-        updttl = int(checked['regeninterval'] / 2)
-        endpoints = list(filter(lambda x: x['_OK_'] == True, checked['endpoints']))
-    if endpoints:
-        epcount = len(endpoints)
-        updzone = dns.resolver.zone_for_name(ownername).canonicalize()
-        updbase = f"{ownername} {updttl} IN HTTPS"
-        prio = 0
-        s = '' if epcount == 1 else 's'
-        updcmds.append(f"zone {updzone}")
-        updcmds.append(f"update delete {ownername} 0 IN HTTPS")
-        for ept in endpoints:
-            prio = ept['priority'] if 'priority' in ept else prio + 1
-            if 'alias' in ept:
-                prio = 0
-                target = ept['alias']
-            elif 'target' in ept:
-                target = ept['target']
-            else:
-                target = '.'
-            if prio == 0:
-                updcmds.append(f"update add {updbase} {prio} {dns.name.from_text(target).canonicalize()}")
-            else:
-                # construct RDATA from params
-                updcmds.append(f"update add {updbase} {prio} {dns.name.from_text(target).canonicalize()}"
-                               f"{rdata_from_params(ept)}")
+    if not checked['OK']:
+        logging.warning(f"Validation failed for '{url}'")
+    elif not checked['Update']:
+        logging.info(f"No update needed for '{url}'")
     else:
-        logging.warning(f"No valid WKECH data: unsafe to update HTTPS RRset for {ownername} -- skipped")
-    return '\n'.join(updcmds)
+        for item in checked['Update']:
+            result.append(f"update delete {item.name} 0 IN {dns.rdatatype.to_text(item.rdtype)}")
+            for rr in item:
+                result.append(f"update add {item.name} {item.ttl}"
+                              f" {dns.rdataclass.to_text(item.rdclass)}"
+                              f" {dns.rdatatype.to_text(item.rdtype)} {rr.to_text()}")
+            result.append("send")
+            result.append("")
+    return result
 
 
 def cmd_get(args) -> None:
@@ -600,17 +583,18 @@ def cmd_check_wkech(args) -> None:
     checked = check_wkech(args.url, target=args.alias)
     if checked['OK']:
         logging.info(f"Validation succeeded")
-        logging.info(f"Number of updates needed: {len(checked['Update'])}")
-        if checked['Update']:
-            print(checked['Update'])
+        count = len(checked['Update'])
+        if count:
+            logging.info(f"{count} RRset{'s' if count > 1 else ''} must be updated for DNS to match WKECH data")
+        else:
+            logging.info(f"DNS matches WKECH data")
 
 
 def cmd_prepare_update(args) -> None:
     """ Prepare HTTPS Update (as input stream for BIND9 NSUPDATE) from validated WKECH data """
     update = prepare_update(args.url, target=args.alias)
-    if update:
-        print(update)
-    logging.warning("This subcommand is not yet fully implemented")
+    for command in update:
+        print(command)
     
 
 def cmd_publish_rrset(args) -> None:
