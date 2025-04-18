@@ -462,7 +462,7 @@ def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict): # refere
             target = endpoint['target'] if 'target' in endpoint else '.'
             params = endpoint['params']
             for tag, val in params.items():
-                if tag in ('ipv4hint', 'ipv6hint'):
+                if tag in ('ipv4hint', 'ipv6hint', 'alpn'):
                     svcparams.append(f"{tag}={','.join(val)}")
                 # TODO: Add further special handling as needed (ALPN?, MANDATORY, ...)
                 else:
@@ -470,6 +470,8 @@ def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict): # refere
             rr = f"{dns.name.from_text(hostname)} {ttl} {dnstype} {priority} {target} {' '.join(svcparams)}"
             logging.debug(f"RR generated from WKECH: {rr}")
             rrset.append(rr)
+    if not rrset:
+        return rrset
     return dns.zonefile.read_rrsets('\n'.join(rrset))
 
 
