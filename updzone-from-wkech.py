@@ -84,7 +84,7 @@ class HTTPResponseParser:
         self.parser.feed_data(data)
 
 
-def parse_http_response(response_bytes):
+def parse_http_response(response_bytes): # in use
     parser = HTTPResponseParser()
     parser.feed_data(response_bytes)
     return {
@@ -95,7 +95,7 @@ def parse_http_response(response_bytes):
     }
 
 
-def svcbname(parsed: ParseResult):
+def svcbname(parsed: ParseResult): # in use
     """Derive DNS name of SVCB/HTTPS record corresponding to target URL"""
     if parsed.scheme == "https":
         if (parsed.port or 443) == 443:
@@ -112,7 +112,7 @@ def svcbname(parsed: ParseResult):
         return None
 
 
-def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, depth = 8
+def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, depth = 8 # in use
                     ) -> List[Optional[dns.resolver.Answer]]:
     result: list[Optional[dns.resolver.Answer]] = []
     try:
@@ -131,7 +131,7 @@ def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, dept
     return result
 
 
-def get_ech_configs(domain, follow_alias: bool = True, depth = 0) -> Tuple[Optional[str], List[bytes]]:
+def get_ech_configs(domain, follow_alias: bool = True, depth = 0) -> Tuple[Optional[str], List[bytes]]: # in use
     """Look up HTTPS record, following aliases as needed"""
     maxdepth = 8                # Arbitrary constant
     try:
@@ -188,7 +188,7 @@ class WKECHdata(TypedDict):
     endpoints: List[WKECHendpoint]
 
 
-def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, target=None) -> ECHresult:
+def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, target=None) -> ECHresult: # in use
     logging.debug(f"Accessing service providing 'https://{hostname}:{port}/' with target '{target}'")
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.load_verify_locations(certifi.where())
@@ -213,7 +213,6 @@ def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, 
                         retry_config = ssock._sslobj.get_ech_retry_config()
                         if retry_config:
                             logging.debug("Received a retry config: %s", base64.b64encode(retry_config))
-                            # return get_http(hostname, port, path, [retry_config])
                             return access_origin(hostname, port, path, [retry_config], False, target)
                     logging.error(f"SSL error for {hostname}:{port} -- {e}")
 
@@ -233,16 +232,16 @@ def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, 
         return ECHresult({'ech_status': None, 'response': b''})
 
 
-def get_http(hostname, port, path, ech_configs, target=None) -> bytes:
+def get_http(hostname, port, path, ech_configs, target=None) -> bytes: # in use
     logging.debug(f"Getting HTTP data from 'https://{hostname}:{port}{path}' with target '{target}'")
     return access_origin(hostname, port, path=path, ech_configs=ech_configs, target=target)["response"]
 
 
-def probe_ech(hostname, port, path, ech_configs, target=None):
+def probe_ech(hostname, port, path, ech_configs, target=None): # in use
     return access_origin(hostname, port, path=path, ech_configs=ech_configs, enable_retry=False, target=target)["ech_status"]
 
 
-def get(url: str, force_grease: bool=False, target: Optional[str]=None):
+def get(url: str, force_grease: bool=False, target: Optional[str]=None): # in use
     logging.debug(f"Getting data for URL '{url}' with target '{target}'")
     parsed = urllib.parse.urlparse(url)
     domain = parsed.hostname
@@ -260,7 +259,7 @@ def get(url: str, force_grease: bool=False, target: Optional[str]=None):
     return parse_http_response(raw)
 
 
-def rectify(j):
+def rectify(j):                 # in use
     """ Convert content at WK URI from earlier format to current """
     if "endpoints" not in j:
         # Nothing to work with
@@ -288,7 +287,7 @@ def rectify(j):
     return j
 
 
-def get_wkech(url, target=None):
+def get_wkech(url, target=None): # in use
     """Retrieve effective WKECH data, following alias if appropriate"""
     logging.debug(f"Fetching WKECH data for url {url}")
     parsed = urllib.parse.urlparse(url)
@@ -304,27 +303,27 @@ def get_wkech(url, target=None):
     return rectified
 
 
-def get_aliased_wkech(wkech, scheme='https'):
-    "Chase SINGLE-STAGE aliasing, if any, and return corresponding ServiceMode WKECH data"
-    #
-    # TODO: recursive aliasing
-    #
-    result = OrderedDict({})
-    if (not wkech) or ('endpoints' not in wkech):
-        return result
-    endpoints = wkech['endpoints']
-    aliased = list(filter(lambda x: 'alias' in x, endpoints))
-    if aliased:
-        if len(endpoints) != len(aliased):
-            logging.warning("Invalid WKECH data: AliasMode and Service mode are mixed")
-        for endpoint in aliased:
-            domain = endpoint['alias']
-            if domain not in result:
-                result[domain] = get_wkech(f"{scheme}://{domain}")
-    return result
+# def get_aliased_wkech(wkech, scheme='https'):
+#     "Chase SINGLE-STAGE aliasing, if any, and return corresponding ServiceMode WKECH data"
+#     #
+#     # TODO: recursive aliasing
+#     #
+#     result = OrderedDict({})
+#     if (not wkech) or ('endpoints' not in wkech):
+#         return result
+#     endpoints = wkech['endpoints']
+#     aliased = list(filter(lambda x: 'alias' in x, endpoints))
+#     if aliased:
+#         if len(endpoints) != len(aliased):
+#             logging.warning("Invalid WKECH data: AliasMode and Service mode are mixed")
+#         for endpoint in aliased:
+#             domain = endpoint['alias']
+#             if domain not in result:
+#                 result[domain] = get_wkech(f"{scheme}://{domain}")
+#     return result
 
 
-def check_wkech(url, regeninterval=3600, target=None) -> dict:
+def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
     """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
     result = {
         'OK': False,            # until we know better
@@ -429,22 +428,22 @@ def check_wkech(url, regeninterval=3600, target=None) -> dict:
     return result
 
 
-def rdata_from_params(ep: dict) -> str:
-    rdata = ''
-    params = ep['params']
-    for paramkey in params:
-        if paramkey == 'alpn':
-            pass                # TODO!
-        elif paramkey in (('ipv4hint', 'ipv6hint')):
-            rdata += f" {paramkey}={','.join(params[paramkey])}"
-        elif paramkey == 'ech':
-            rdata += f" {paramkey}={params[paramkey]}"
-        else:
-            pass
-    return rdata
+# def rdata_from_params(ep: dict) -> str:
+#     rdata = ''
+#     params = ep['params']
+#     for paramkey in params:
+#         if paramkey == 'alpn':
+#             pass                # TODO!
+#         elif paramkey in (('ipv4hint', 'ipv6hint')):
+#             rdata += f" {paramkey}={','.join(params[paramkey])}"
+#         elif paramkey == 'ech':
+#             rdata += f" {paramkey}={params[paramkey]}"
+#         else:
+#             pass
+#     return rdata
 
 
-def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict):
+def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict): # reference is earlier ???
     rrset = []
     if not wkechdata:
         return []
@@ -474,7 +473,7 @@ def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict):
     return dns.zonefile.read_rrsets('\n'.join(rrset))
 
 
-def prepare_update(url, target=None):
+def prepare_update(url, target=None): # in use
     result = []
     checked = check_wkech(url, target=target)
     if not checked['OK']:
@@ -493,26 +492,25 @@ def prepare_update(url, target=None):
     return result
 
 
-def cmd_get(args) -> None:
+def cmd_get(args) -> None:      # in use, but maybe not really
     """Retrieves data from a given URL."""
     print(get(args.url, args.force_grease))
 
 
-def cmd_echconfig(args) -> None:
-    """Print the bas64-encoded ECHConfig values for a given URL."""
-    parsed = urllib.parse.urlparse(args.url)
-    alias, configs = get_ech_configs(svcbname(parsed))
-    for config in configs:
-        print(base64.b64encode(config).decode("utf-8"))
+# def cmd_echconfig(args) -> None:
+#     """Print the bas64-encoded ECHConfig values for a given URL."""
+#     parsed = urllib.parse.urlparse(args.url)
+#     alias, configs = get_ech_configs(svcbname(parsed))
+#     for config in configs:
+#         print(base64.b64encode(config).decode("utf-8"))
 
 
-class GetTarget(TypedDict):
+class GetTarget(TypedDict):     # in use
     description: NotRequired[str]
     expected: NotRequired[str]
     url: str
 
 
-# def read_targets_list() -> List[GetTarget]:
 def read_targets_list() -> Sequence[GetTarget]: # ? -- mypy suggests Sequence instead of List
     try:
         input_json = sys.stdin.read()
@@ -556,7 +554,7 @@ def cmd_getlist(demo: bool) -> None:
         cmd_get(target["url"])
 
 
-def cmd_fetch(args) -> None:
+def cmd_fetch(args) -> None:    # in use
     """ Retrieve data from WKECH URL corresponding to given url """
     url = args.url
     loaded = get_wkech(url, args.alias)
@@ -578,7 +576,7 @@ def cmd_fetch(args) -> None:
         logging.warning(f"Found no WKECH data for {url}")
 
 
-def cmd_check_wkech(args) -> None:
+def cmd_check_wkech(args) -> None: # in use
     """ Retrieve data from WKECH URL and validate each ECHConfig found """
     checked = check_wkech(args.url, target=args.alias)
     if checked['OK']:
@@ -590,14 +588,14 @@ def cmd_check_wkech(args) -> None:
             logging.info(f"DNS matches WKECH data")
 
 
-def cmd_prepare_update(args) -> None:
+def cmd_prepare_update(args) -> None: # in use
     """ Prepare HTTPS Update (as input stream for BIND9 NSUPDATE) from validated WKECH data """
     update = prepare_update(args.url, target=args.alias)
     for command in update:
         print(command)
     
 
-def cmd_publish_rrset(args) -> None:
+def cmd_publish_rrset(args) -> None: # future work
     """ Update DNS directly with HTTPS RRset from validated WKECH data """
     # TODO: consider more elaborate interface for this command
     logging.warning("This subcommand is not yet implemented")
@@ -663,7 +661,7 @@ def main() -> None:
     getwkech_parser.add_argument('--alias', '-a', nargs='?', default=None)
     getwkech_parser.set_defaults(func=cmd_fetch)
 
-    # publish_rrset_parser = subparsers.add_parser("publish_rrset", help="Validate data from WKECH URL")
+    # publish_rrset_parser = subparsers.add_parser("publish_rrset", help="Update DNS directly")
     # publish_rrset_parser.add_argument("url", help="URL from which to construct WKECH URL")
     # publish_rrset_parser.set_defaults(func=cmd_publish_rrset)
 
