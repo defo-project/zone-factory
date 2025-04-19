@@ -20,6 +20,14 @@ import dns.zonefile
 import httptools
 
 
+class ChosenResolver:
+    from dns.resolver import get_default_resolver, make_resolver_at
+    active = get_default_resolver()
+
+    def activate(server):
+       ChosenResolver.active = ChosenResolver.make_resolver_at(server)
+
+
 class ECHConfigList:
     import base64
     import logging
@@ -116,7 +124,8 @@ def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, dept
                     ) -> List[Optional[dns.resolver.Answer]]:
     result: list[Optional[dns.resolver.Answer]] = []
     try:
-        ans = dns.resolver.resolve(domain, "HTTPS")
+        # ans = dns.resolver.resolve(domain, "HTTPS")
+        ans = ChosenResolver.active.resolve(domain, "HTTPS")
     except dns.resolver.NoAnswer:
         logging.warning(f"No HTTPS record found for {domain}")
     except Exception as e:
@@ -135,7 +144,8 @@ def get_ech_configs(domain, follow_alias: bool = True, depth = 0) -> Tuple[Optio
     """Look up HTTPS record, following aliases as needed"""
     maxdepth = 8                # Arbitrary constant
     try:
-        ans = dns.resolver.resolve(domain, "HTTPS")
+        # ans = dns.resolver.resolve(domain, "HTTPS")
+        ans = ChosenResolver.active.resolve(domain, "HTTPS")
     except dns.resolver.NoAnswer:
         logging.warning(f"No HTTPS record found for {domain}")
         return None, []
@@ -471,8 +481,8 @@ def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict): # refere
             logging.debug(f"RR generated from WKECH: {rr}")
             rrset.append(rr)
     if not rrset:
-        return rrset
-    return dns.zonefile.read_rrsets('\n'.join(rrset))
+        return rrset                                  # Empty list
+    return dns.zonefile.read_rrsets('\n'.join(rrset)) # List (singleton) of dns.rrset objects
 
 
 def prepare_update(url, target=None): # in use
@@ -564,10 +574,6 @@ def cmd_fetch(args) -> None:    # in use
         while loaded:
             print(f"WKECH data for {url}:")
             print(json.dumps(loaded))
-            # for pair in get_aliased_wkech(loaded, urllib.parse.urlparse(args.url).scheme).items():
-            #     domain, wkechdata = pair
-            #     print(f"WKECH data for alias {domain}:")
-            #     print(json.dumps(wkechdata))
             endpoints = loaded['endpoints']
             loaded = None
             for endpoint in endpoints:
@@ -576,6 +582,24 @@ def cmd_fetch(args) -> None:    # in use
                     loaded = get_wkech(url)
     else:
         logging.warning(f"Found no WKECH data for {url}")
+
+
+# def cmd_fetch(args) -> None:    # in use
+#     """ Retrieve data from WKECH URL corresponding to each url in given list """
+#     for url in args.url:
+#         loaded = get_wkech(url, args.alias)
+#         if loaded:
+#             while loaded:
+#                 print(f"WKECH data for {url}:")
+#                 print(json.dumps(loaded))
+#                 endpoints = loaded['endpoints']
+#                 loaded = None
+#                 for endpoint in endpoints:
+#                     if 'alias' in endpoint:
+#                         url = f"{urllib.parse.urlparse(url).scheme}://{endpoint['alias']}"
+#                         loaded = get_wkech(url)
+#         else:
+#             logging.warning(f"Found no WKECH data for {url}")
 
 
 def cmd_check_wkech(args) -> None: # in use
@@ -613,6 +637,10 @@ def main() -> None:
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose logging"
+    )
+    parser.add_argument(
+        "-n", "--nameserver", "--name-server", default=None, nargs='?',
+        help="DNS name server to use instead of system resolver"
     )
 
     subparsers = parser.add_subparsers(
@@ -659,7 +687,9 @@ def main() -> None:
         # "getwkech",
         "fetch",
         help="Fetch WKECH data without validation")
-    getwkech_parser.add_argument("url", help="URL from which to construct WKECH URL")
+    getwkech_parser.add_argument("url",
+                                 # [alternative for list of URLs] nargs='*',
+                                 help="URL from which to construct WKECH URL")
     getwkech_parser.add_argument('--alias', '-a', nargs='?', default=None)
     getwkech_parser.set_defaults(func=cmd_fetch)
 
@@ -668,6 +698,8 @@ def main() -> None:
     # publish_rrset_parser.set_defaults(func=cmd_publish_rrset)
 
     args = parser.parse_args()
+    if args.nameserver:
+        ChosenResolver.activate(args.nameserver)
 
     # Set up logging
     logging.basicConfig(
