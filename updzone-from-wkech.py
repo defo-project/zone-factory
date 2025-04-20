@@ -18,7 +18,7 @@ import dns.rdatatype
 import dns.resolver
 import dns.zonefile
 import httptools
-
+import csv
 
 class ChosenResolver:
     from dns.resolver import get_default_resolver, make_resolver_at
@@ -395,7 +395,7 @@ def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
         logging.warning(f"Data retrieved from {wkurl} is invalid")
     else:
         logging.debug(f"Data retrieved from {wkurl}: {rectified}")
-        rrset = wkech_to_HTTPS_rrset(svcbname, rectified)
+        rrset = wkech_to_HTTPS_rrset(svcbname, hostname, port, rectified)
         if rrset[0] != chain[0].rrset:
             logging.debug(f"Generated RRset differs from published one")
             logging.debug(f"Generated RRset: {rrset[0]}")
@@ -453,7 +453,7 @@ def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
 #     return rdata
 
 
-def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict): # reference is earlier ???
+def wkech_to_HTTPS_rrset(qname: dns.name.Name|str, host, port, wkechdata: dict): # reference is earlier ???
     rrset = []
     if not wkechdata:
         return []
@@ -463,13 +463,19 @@ def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict): # refere
         if 'alias' in endpoint:
             priority = 0
             target = endpoint['alias']
-            rr = f"{dns.name.from_text(hostname)} {ttl} {dnstype} {priority} {target}"
+            rr = f"{dns.name.from_text(qname)} {ttl} {dnstype} {priority} {target}"
             logging.debug(f"RR generated from WKECH: {rr}")
             rrset.append(rr)
         else:
             svcparams = []
             priority = endpoint['priority'] if 'priority' in endpoint else 1
-            target = endpoint['target'] if 'target' in endpoint else '.'
+            if 'target' in endpoint:
+                target = endpoint['target']
+            elif port != 443:
+                target = host
+            else:
+                target = '.'
+            # target = endpoint['target'] if 'target' in endpoint else '.'
             params = endpoint['params']
             for tag, val in params.items():
                 if tag in ('ipv4hint', 'ipv6hint', 'alpn'):
@@ -477,7 +483,7 @@ def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict): # refere
                 # TODO: Add further special handling as needed (ALPN?, MANDATORY, ...)
                 else:
                     svcparams.append(f"{tag}={val}")
-            rr = f"{dns.name.from_text(hostname)} {ttl} {dnstype} {priority} {target} {' '.join(svcparams)}"
+            rr = f"{dns.name.from_text(qname)} {ttl} {dnstype} {priority} {target} {' '.join(svcparams)}"
             logging.debug(f"RR generated from WKECH: {rr}")
             rrset.append(rr)
     if not rrset:
@@ -627,7 +633,7 @@ def cmd_publish_rrset(args) -> None: # future work
     logging.warning("This subcommand is not yet implemented")
 
 
-def main() -> None:
+def oldmain() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "A Python tool for updating a DNS zone from WKECH data"
@@ -724,6 +730,37 @@ def main() -> None:
             f"Error: Subcommand '{args.command}' was called, but it requires no additional arguments: {e}"
         )
 
+def main():
+    '''Read in a CSV file name with each line being host,port'''
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Enable verbose logging")
+    parser.add_argument("-d", "--domainfile", help="CSV file naming hosts:ports")
+    args = parser.parse_args()
+    dfile = "domains.csv"
+    if args.domainfile != None:
+        dfile = args.domainfile
+    if not os.access(dfile, os.R_OK):
+        print("Can't open", dfile, "exiting")
+        sys.exit(1)
+    # Set up logging
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+    with open(dfile) as csvfile:
+        readCSV = csv.reader(csvfile, delimiter=',')
+        for row in readCSV:
+            host=row[0]
+            fake_url="https://"+host+"/"
+            port=443
+            if len(row) > 1:
+                port=row[1]
+                fake_url="https://"+host+":"+port+"/"
+            logging.debug("Processing " + fake_url)
+            result=prepare_update(fake_url)
+            for nsu_command in result:
+                print(nsu_command)
 
 if __name__ == "__main__":
     main()
