@@ -395,11 +395,11 @@ def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
         logging.warning(f"Data retrieved from {wkurl} is invalid")
     else:
         logging.debug(f"Data retrieved from {wkurl}: {rectified}")
-        rrset = wkech_to_HTTPS_rrset(svcbname, rectified)
-        if rrset[0] != chain[0].rrset:
+        rrset = wkech_to_HTTPS_rrset(svcbname, rectified, target=hostname)
+        logging.debug(f"Generated RRset: {rrset[0]}")
+        logging.debug(f"Published RRset: {chain[0].rrset}")
+        if rrset[0] != chain[0].rrset: # TODO: consider checking TTL also
             logging.debug(f"Generated RRset differs from published one")
-            logging.debug(f"Generated RRset: {rrset[0]}")
-            logging.debug(f"Published RRset: {chain[0].rrset}")
 
             bad_endpoints = 0   # none seen yet
             for endpoint in rectified['endpoints']:
@@ -453,7 +453,7 @@ def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
 #     return rdata
 
 
-def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict): # reference is earlier ???
+def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str, wkechdata: dict, target = None): # reference is earlier ???
     rrset = []
     if not wkechdata:
         return []
@@ -463,23 +463,42 @@ def wkech_to_HTTPS_rrset(hostname: dns.name.Name|str, wkechdata: dict): # refere
         if 'alias' in endpoint:
             priority = 0
             target = endpoint['alias']
-            rr = f"{dns.name.from_text(hostname)} {ttl} {dnstype} {priority} {target}"
-            logging.debug(f"RR generated from WKECH: {rr}")
+            rr = f"{dns.name.from_text(svcbname)} {ttl} {dnstype} {priority} {target}"
+            # logging.debug(f"RR generated from WKECH: {rr}")
             rrset.append(rr)
         else:
-            svcparams = []
-            priority = endpoint['priority'] if 'priority' in endpoint else 1
-            target = endpoint['target'] if 'target' in endpoint else '.'
-            params = endpoint['params']
-            for tag, val in params.items():
-                if tag in ('ipv4hint', 'ipv6hint', 'alpn'):
-                    svcparams.append(f"{tag}={','.join(val)}")
-                # TODO: Add further special handling as needed (ALPN?, MANDATORY, ...)
-                else:
-                    svcparams.append(f"{tag}={val}")
-            rr = f"{dns.name.from_text(hostname)} {ttl} {dnstype} {priority} {target} {' '.join(svcparams)}"
-            logging.debug(f"RR generated from WKECH: {rr}")
-            rrset.append(rr)
+            if 'target' in endpoint:         # WKECH specifies target
+                target = endpoint['target']  # - obey, ignoring arg -- NOTE: GIGO risk
+                logging.debug(f"WKECH specifies target: '{target}'")
+            if not target:                   # target missing from both WKECH and arg
+                if svcbname.startswith('_'): # svcbname no good
+                    pass                     # - avoid using it
+                else:                        # svcbname OK
+                    target = '.'             # - use compact equivalent
+            elif target.startswith('_'):
+                target = None
+                logging.warning(f"Target is invalid: '{target}'")
+            if target:
+                if target == svcbname:
+                    target = '.'
+                svcparams = []
+                priority = endpoint['priority'] if 'priority' in endpoint else 1 # TODO: improve this
+                params = endpoint['params']
+                for tag, val in params.items():
+                    if tag in ('ipv4hint', 'ipv6hint', 'alpn', 'mandatory'):
+                        svcparams.append(f"{tag}={','.join(val)}")
+                    # TODO: Add further special handling as needed (ALPN?, MANDATORY, ...)
+                    elif tag in ('port', 'ech'):
+                        svcparams.append(f"{tag}={val}")
+                    elif tag in ('no-default-alpn'): 
+                        svcparams.append(f"{tag}")
+                    else:
+                        pass    # Don't propagate unrecognized parameters
+                rr = f"{dns.name.from_text(svcbname)} {ttl} {dnstype} {priority} {target} {' '.join(svcparams)}"
+                # logging.debug(f"RR generated from WKECH: {rr}")
+                rrset.append(rr)
+            else:
+                logging.warning(f"No valid target found for endpoint: {endpoint}")
     if not rrset:
         return rrset                                  # Empty list
     return dns.zonefile.read_rrsets('\n'.join(rrset)) # List (singleton) of dns.rrset objects
@@ -647,25 +666,26 @@ def main() -> None:
         title="subcommands", dest="command", help="Available subcommands"
     )
 
-    if not os.path.basename(sys.argv[0]).startswith('updzone'):
-        echconfig_parser = subparsers.add_parser(
-            "echconfig", help="Print ECHConfig values from DNS (base64 encoded)."
-        )
-        echconfig_parser.add_argument("url", help="URL to fetch config for.")
-        echconfig_parser.set_defaults(func=cmd_echconfig)
+    # ### inherited from pyclient.py -- no longer needed
+    # if not os.path.basename(sys.argv[0]).startswith('updzone'):
+    #     echconfig_parser = subparsers.add_parser(
+    #         "echconfig", help="Print ECHConfig values from DNS (base64 encoded)."
+    #     )
+    #     echconfig_parser.add_argument("url", help="URL to fetch config for.")
+    #     echconfig_parser.set_defaults(func=cmd_echconfig)
 
-        get_parser = subparsers.add_parser("get", help="Fetch a URL.")
-        get_parser.add_argument("url", help="URL to fetch")
-        get_parser.add_argument(
-            "-g", "--force-grease", action="store_true", help="Force GREASE"
-        )
-        get_parser.set_defaults(func=cmd_get)
+    #     get_parser = subparsers.add_parser("get", help="Fetch a URL.")
+    #     get_parser.add_argument("url", help="URL to fetch")
+    #     get_parser.add_argument(
+    #         "-g", "--force-grease", action="store_true", help="Force GREASE"
+    #     )
+    #     get_parser.set_defaults(func=cmd_get)
 
-        getlist_parser = subparsers.add_parser(
-            "getlist", help="Iterate through a list of targets."
-        )
-        getlist_parser.add_argument("--demo", help="Use a set of demo targets.", action="store_true")
-        getlist_parser.set_defaults(func=cmd_getlist)
+    #     getlist_parser = subparsers.add_parser(
+    #         "getlist", help="Iterate through a list of targets."
+    #     )
+    #     getlist_parser.add_argument("--demo", help="Use a set of demo targets.", action="store_true")
+    #     getlist_parser.set_defaults(func=cmd_getlist)
 
     prepare_update_parser = subparsers.add_parser(
         # "prepare_update",
