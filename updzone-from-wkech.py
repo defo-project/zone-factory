@@ -314,26 +314,6 @@ def get_wkech(url, target=None): # in use
     return rectified
 
 
-# def get_aliased_wkech(wkech, scheme='https'):
-#     "Chase SINGLE-STAGE aliasing, if any, and return corresponding ServiceMode WKECH data"
-#     #
-#     # TODO: recursive aliasing
-#     #
-#     result = OrderedDict({})
-#     if (not wkech) or ('endpoints' not in wkech):
-#         return result
-#     endpoints = wkech['endpoints']
-#     aliased = list(filter(lambda x: 'alias' in x, endpoints))
-#     if aliased:
-#         if len(endpoints) != len(aliased):
-#             logging.warning("Invalid WKECH data: AliasMode and Service mode are mixed")
-#         for endpoint in aliased:
-#             domain = endpoint['alias']
-#             if domain not in result:
-#                 result[domain] = get_wkech(f"{scheme}://{domain}")
-#     return result
-
-
 def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
     """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
     result = {
@@ -439,21 +419,6 @@ def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
     return result
 
 
-# def rdata_from_params(ep: dict) -> str:
-#     rdata = ''
-#     params = ep['params']
-#     for paramkey in params:
-#         if paramkey == 'alpn':
-#             pass                # TODO!
-#         elif paramkey in (('ipv4hint', 'ipv6hint')):
-#             rdata += f" {paramkey}={','.join(params[paramkey])}"
-#         elif paramkey == 'ech':
-#             rdata += f" {paramkey}={params[paramkey]}"
-#         else:
-#             pass
-#     return rdata
-
-
 def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str, wkechdata: dict, target = None): # reference is earlier ???
     rrset = []
     if not wkechdata:
@@ -529,61 +494,10 @@ def cmd_get(args) -> None:      # in use, but maybe not really
     print(get(args.url, args.force_grease))
 
 
-# def cmd_echconfig(args) -> None:
-#     """Print the bas64-encoded ECHConfig values for a given URL."""
-#     parsed = urllib.parse.urlparse(args.url)
-#     alias, configs = get_ech_configs(svcbname(parsed))
-#     for config in configs:
-#         print(base64.b64encode(config).decode("utf-8"))
-
-
 class GetTarget(TypedDict):     # in use
     description: NotRequired[str]
     expected: NotRequired[str]
     url: str
-
-
-def read_targets_list() -> Sequence[GetTarget]: # ? -- mypy suggests Sequence instead of List
-    try:
-        input_json = sys.stdin.read()
-        input_data = json.loads(input_json)
-
-        if not isinstance(input_data, list):
-            logging.critical("Invalid input format: JSON input must be a list")
-            sys.exit(1)
-
-        for item in input_data:
-            if isinstance(item, dict):
-                if "url" not in item:
-                    logging.error(f"Invalid input format, missing url: {item}")
-                    sys.exit(1)
-                continue
-            if not isinstance(item, str):
-                logging.critical(
-                    f"Invalid format: Each entry must be a string or object, but got {item}"
-                )
-                sys.exit(1)
-        return input_data
-    except json.JSONDecodeError as e:
-        logging.critical(f"Error decoding JSON input: {e}")
-        sys.exit(1)
-
-
-# def cmd_getlist(demo: bool) -> None:
-#     # targets: List[Union[GetTarget, str]]
-#     targets: Sequence[Union[GetTarget, str]] # ? -- mypy suggests Sequence instead of List
-#     if demo:
-#         targets = json.load(open("targets.json"))
-#     else:
-#         targets = read_targets_list()
-#     for target in targets:
-#         logging.debug("--------------------------------------------------------")
-#         if isinstance(target, str):
-#             cmd_get(target)
-#             continue
-#         logging.debug("Target description: %s", target["description"])
-#         logging.debug("Expected ECH status: %s", target["expected"])
-#         cmd_get(target["url"])
 
 
 def cmd_fetch(args) -> None:    # in use
@@ -602,24 +516,6 @@ def cmd_fetch(args) -> None:    # in use
                     loaded = get_wkech(url)
     else:
         logging.warning(f"Found no WKECH data for {url}")
-
-
-# def cmd_fetch(args) -> None:    # in use
-#     """ Retrieve data from WKECH URL corresponding to each url in given list """
-#     for url in args.url:
-#         loaded = get_wkech(url, args.alias)
-#         if loaded:
-#             while loaded:
-#                 print(f"WKECH data for {url}:")
-#                 print(json.dumps(loaded))
-#                 endpoints = loaded['endpoints']
-#                 loaded = None
-#                 for endpoint in endpoints:
-#                     if 'alias' in endpoint:
-#                         url = f"{urllib.parse.urlparse(url).scheme}://{endpoint['alias']}"
-#                         loaded = get_wkech(url)
-#         else:
-#             logging.warning(f"Found no WKECH data for {url}")
 
 
 def cmd_check_wkech(args) -> None: # in use
@@ -689,12 +585,6 @@ def ready_batch(action, args):
         logging.info(f"Scheme not supported: '{url}'")
 
 
-# def cmd_prepare_update(args) -> None: # in use
-#     """ Prepare HTTPS Update (as input stream for BIND9 NSUPDATE) from validated WKECH data """
-#     update = prepare_update(args.url, target=args.alias)
-#     for command in update:
-#         print(command)
-
 def cmd_prepare_update(args) -> None: # in use
     """ Prepare HTTPS Update (as input stream for BIND9 NSUPDATE) from validated WKECH data """
     action = prepare_update
@@ -726,28 +616,6 @@ def main() -> None:
     subparsers = parser.add_subparsers(
         title="subcommands", dest="command", help="Available subcommands"
     )
-
-    # ### inherited from pyclient.py -- no longer needed
-    # if not os.path.basename(sys.argv[0]).startswith('updzone'):
-    #     echconfig_parser = subparsers.add_parser(
-    #         "echconfig", help="Print ECHConfig values from DNS (base64 encoded)."
-    #     )
-    #     echconfig_parser.add_argument("url", help="URL to fetch config for.")
-    #     echconfig_parser.set_defaults(func=cmd_echconfig)
-
-    #     get_parser = subparsers.add_parser("get", help="Fetch a URL.")
-    #     get_parser.add_argument("url", help="URL to fetch")
-    #     get_parser.add_argument(
-    #         "-g", "--force-grease", action="store_true", help="Force GREASE"
-    #     )
-    #     get_parser.set_defaults(func=cmd_get)
-
-    #     getlist_parser = subparsers.add_parser(
-    #         "getlist", help="Iterate through a list of targets."
-    #     )
-    #     getlist_parser.add_argument("--demo", help="Use a set of demo targets.", action="store_true")
-    #     getlist_parser.set_defaults(func=cmd_getlist)
-
 
     # dummy_parser = subparsers.add_parser(
     #     "dummy",
