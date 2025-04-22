@@ -18,6 +18,7 @@ import dns.rdatatype
 import dns.resolver
 import dns.zonefile
 import httptools
+import csv
 
 
 class ChosenResolver:
@@ -568,21 +569,21 @@ def read_targets_list() -> Sequence[GetTarget]: # ? -- mypy suggests Sequence in
         sys.exit(1)
 
 
-def cmd_getlist(demo: bool) -> None:
-    # targets: List[Union[GetTarget, str]]
-    targets: Sequence[Union[GetTarget, str]] # ? -- mypy suggests Sequence instead of List
-    if demo:
-        targets = json.load(open("targets.json"))
-    else:
-        targets = read_targets_list()
-    for target in targets:
-        logging.debug("--------------------------------------------------------")
-        if isinstance(target, str):
-            cmd_get(target)
-            continue
-        logging.debug("Target description: %s", target["description"])
-        logging.debug("Expected ECH status: %s", target["expected"])
-        cmd_get(target["url"])
+# def cmd_getlist(demo: bool) -> None:
+#     # targets: List[Union[GetTarget, str]]
+#     targets: Sequence[Union[GetTarget, str]] # ? -- mypy suggests Sequence instead of List
+#     if demo:
+#         targets = json.load(open("targets.json"))
+#     else:
+#         targets = read_targets_list()
+#     for target in targets:
+#         logging.debug("--------------------------------------------------------")
+#         if isinstance(target, str):
+#             cmd_get(target)
+#             continue
+#         logging.debug("Target description: %s", target["description"])
+#         logging.debug("Expected ECH status: %s", target["expected"])
+#         cmd_get(target["url"])
 
 
 def cmd_fetch(args) -> None:    # in use
@@ -633,17 +634,77 @@ def cmd_check_wkech(args) -> None: # in use
             logging.info(f"DNS matches WKECH data")
 
 
-def cmd_prepare_update(args) -> None: # in use
-    """ Prepare HTTPS Update (as input stream for BIND9 NSUPDATE) from validated WKECH data """
-    update = prepare_update(args.url, target=args.alias)
-    for command in update:
-        print(command)
-    
-
 def cmd_publish_rrset(args) -> None: # future work
     """ Update DNS directly with HTTPS RRset from validated WKECH data """
     # TODO: consider more elaborate interface for this command
     logging.warning("This subcommand is not yet implemented")
+
+
+def run_batch(action, todo, delimiter=','):
+    with open(todo) as csvfile:
+        readCSV = csv.reader(csvfile, delimiter=delimiter)
+        for row in readCSV:
+            logging.debug(f"Parsing row from file '{todo}': {row}")
+            if len(row) < 1 or not row[0]:
+                continue    # skip empties
+            if str(row[0])[0] in ';#': # allow comments
+                continue               # and skip them
+            alias = None
+            port = None
+            thisurl = f"https://{row[0]}"
+            if len(row) > 2 and row[2]:
+                alias = str(row[2])
+            if len(row) > 1 and row[1]:
+                port = int(row[1])
+            if port and port != 443:
+                thisurl += f":{port}/"
+            else:
+                thisurl += "/"
+            if alias:
+                logging.info(f"Processing URL {thisurl} (alias {alias})")
+            else:
+                logging.info(f"Processing URL {thisurl}")
+            #
+            # TODO: move print() to invoked function (perhaps wrapper around action)
+            #
+            update = action(thisurl, target=alias)
+            for command in update:
+                print(command)
+
+
+def ready_batch(action, args):
+    url = args.url
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme in ['', 'csv']:
+        descr = '(presumed CSV)' if not parsed.scheme else 'CSV'
+        logging.info(f"Processing batch {descr} file: '{parsed.path}'")
+        run_batch(action, parsed.path)
+    elif parsed.scheme in ['https']: # Maybe HTTP also?
+        logging.info(f"Processing single URL '{url}'")
+        update = action(url, target=args.alias)
+        # TODO: move print() (se above)
+        for command in update:
+            print(command)
+    else:
+        logging.info(f"Scheme not supported: '{url}'")
+
+
+# def cmd_prepare_update(args) -> None: # in use
+#     """ Prepare HTTPS Update (as input stream for BIND9 NSUPDATE) from validated WKECH data """
+#     update = prepare_update(args.url, target=args.alias)
+#     for command in update:
+#         print(command)
+
+def cmd_prepare_update(args) -> None: # in use
+    """ Prepare HTTPS Update (as input stream for BIND9 NSUPDATE) from validated WKECH data """
+    action = prepare_update
+    ready_batch(action, args)
+    
+
+# def cmd_dummy(args) -> None:
+#     """ Dummy command handler for testing """
+#     action = prepare_update
+#     ready_batch(action, args)
 
 
 def main() -> None:
@@ -687,11 +748,22 @@ def main() -> None:
     #     getlist_parser.add_argument("--demo", help="Use a set of demo targets.", action="store_true")
     #     getlist_parser.set_defaults(func=cmd_getlist)
 
+
+    # dummy_parser = subparsers.add_parser(
+    #     "dummy",
+    #     help="Dummy command for testing")
+    # dummy_parser.add_argument("url", help="URL to use for testing")
+    # dummy_parser.add_argument('--alias', '-a', nargs='?', default=None)
+    # dummy_parser.set_defaults(func=cmd_dummy)
+
     prepare_update_parser = subparsers.add_parser(
         # "prepare_update",
         "generate",
         help="Fetch WKECH data and, if valid, generate zone update commands")
-    prepare_update_parser.add_argument("url", help="URL from which to construct WKECH URL")
+    prepare_update_parser.add_argument("url",
+                                       # help="URL from which to construct WKECH URL"
+                                       help="URL with either 'https:' authority, or 'csv:' path to batch file"
+                                       )
     prepare_update_parser.add_argument('--alias', '-a', nargs='?', default=None)
     prepare_update_parser.set_defaults(func=cmd_prepare_update)
 
@@ -709,7 +781,7 @@ def main() -> None:
         help="Fetch WKECH data without validation")
     getwkech_parser.add_argument("url",
                                  # [alternative for list of URLs] nargs='*',
-                                 help="URL from which to construct WKECH URL")
+                                 help="Origin URL from which to construct WKECH URL")
     getwkech_parser.add_argument('--alias', '-a', nargs='?', default=None)
     getwkech_parser.set_defaults(func=cmd_fetch)
 
@@ -733,9 +805,9 @@ def main() -> None:
         parser.print_help()
         return
 
-    if args.command == "getlist":
-        args.func(args.demo)
-        return
+    # if args.command == "getlist":
+    #     args.func(args.demo)
+    #     return
 
     try:
         args.func(args)

@@ -1,0 +1,15 @@
+# List of origins for verification
+# Comment lines begin with '#'
+; or alternatively with ';'
+; and are skipped
+# as are empty lines
+
+; Fields:
+; hostname, port, alias endpoint
+my-own.net
+
+my-own.net,8443
+
+alias-no-ip.esni.defo.ie,,cover.ie
+
+## -- ENDS --
