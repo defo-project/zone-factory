@@ -46,7 +46,14 @@ def addtxtmarker(key, bindhost, zone, owner, ttl, prefix, str2p):
     return lresponse
 
 
-# check we can read the key file
+# Check we can read the key file
+# Note that bind resets file perms for this to 600 on
+# re-start to we need to do something to allow us to
+# read that file. Our local plan is that we add the
+# UID running this to the bind group, and change the
+# perms for this file to 640. We follow the recipe
+# given at the URL below when doing that.
+# https://serverfault.com/questions/1149093/how-can-i-change-the-default-permissions-for-run-named-session-key-in-bind9
 kfile="/run/named/session.key"
 if not os.access(kfile, os.R_OK):
     print("Can't open key file", kfile, "exiting")
