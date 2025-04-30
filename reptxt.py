@@ -1,6 +1,32 @@
 import sys, os, dns.query, dns.update, dns.tsigkeyring
 import dns.resolver
 from datetime import datetime
+import bind9_parser
+
+
+def load_keyring(keyfile):
+    '''
+        Initialize a keyring from a configuration file in named.conf syntax,
+        typically /run/named/session.key.
+
+        That file is updated every time named is restarted so we read from it
+        each time. We don't want to be root or the bind user though so we've
+        added our user to the bind group and chmod'd that file to 640.
+
+    '''
+    keydict = dict()
+    try:
+        with open(keyfile) as f:
+            cfg = f.read()
+        clauses = bind9_parser.clause_statements()
+        d = clauses.parseString(cfg).asDict()
+        for entry in d['key']:
+            keydict[entry['key_id'].strip('"')] = entry['secret'].strip('"')
+    except Exception as e:
+        print(f"{e}")
+        sys.exit(2)
+    return dns.tsigkeyring.from_text(keydict)
+
 
 def readkeyfromfile(kfile):
     '''
@@ -19,6 +45,7 @@ def readkeyfromfile(kfile):
         'local-ddns': key
         })
     return keyring
+
 
 def addtxtmarker(key, bindhost, zone, owner, ttl, prefix, str2p):
     '''
@@ -46,29 +73,23 @@ def addtxtmarker(key, bindhost, zone, owner, ttl, prefix, str2p):
     return lresponse
 
 
-# Check we can read the key file
-# Note that bind resets file perms for this to 600 on
-# re-start to we need to do something to allow us to
-# read that file. Our local plan is that we add the
-# UID running this to the bind group, and change the
-# perms for this file to 640. We follow the recipe
-# given at the URL below when doing that.
-# https://serverfault.com/questions/1149093/how-can-i-change-the-default-permissions-for-run-named-session-key-in-bind9
+# check we can read the key file
 kfile="/run/named/session.key"
 if not os.access(kfile, os.R_OK):
     print("Can't open key file", kfile, "exiting")
     sys.exit(1)
 
 # read key from key file
-key=readkeyfromfile(kfile)
+### key=readkeyfromfile(kfile)
+###
+key = load_keyring(kfile)
 # we're localhost only for this
 bindhost='::1'
-# set zone we want to update, this may be needed for e.g.
-# owners like draft-13.esni.defo.ie where the zone is defo.ie
-zone="my-own.net"
 # choose this as my-oen.net has an SPF TXT RR so we don't disturb
 # while debugging
 owner="_8443._HTTPS.my-own.net."
+# Need to set zone we want to update; it can be derived from the owner
+zone = dns.resolver.zone_for_name(owner)
 # we do need a TTL :-)
 ttl=100
 # we'll ditch old TXT RRs starting with this..
@@ -77,7 +98,7 @@ prefix = "WKECH-07:"
 str2p = f"{prefix} {datetime.now()}"
 # leaving any other TXT RRs as were (modulo TTL)
 
-print(f"Adding a TXXT RR for {str2p}")
+print(f"Adding a TXT RR for {owner}: {str2p}")
 
 # fire...
 lresponse = addtxtmarker(key, bindhost, zone, owner, ttl, prefix, str2p)
