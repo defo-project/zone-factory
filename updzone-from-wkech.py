@@ -11,14 +11,19 @@ from typing import List, OrderedDict, TypedDict, NotRequired, Union, Tuple, Sequ
 from urllib.parse import ParseResult
 
 import certifi
+import httptools
+import csv
+
 import dns.message
 import dns.name
 import dns.rdataclass
 import dns.rdatatype
 import dns.resolver
 import dns.zonefile
-import httptools
-import csv
+import dns.tsigkeyring
+import dns.update
+import dns.exception
+import bind9_parser
 
 
 class ChosenResolver:
@@ -91,6 +96,39 @@ class HTTPResponseParser:
 
     def feed_data(self, data):
         self.parser.feed_data(data)
+
+
+
+def load_keyring(keyfile):
+    '''
+        Initialize a keyring from a configuration file in named.conf syntax,
+        typically /run/named/session.key.
+
+        That file is updated every time named is restarted so we read from it
+        each time. We don't want to be root or the bind user though so we've
+        added our user to the bind group and chmod'd that file to 640.
+
+    '''
+    keydict = {}
+    if not os.access(keyfile, os.R_OK):
+        logging.warning(f"Can't open key file: '{keyfile}'")
+    else:
+        try:
+            with open(keyfile) as f:
+                cfg = f.read()
+            clauses = bind9_parser.clause_statements()
+            d = clauses.parseString(cfg).asDict()
+            for entry in d['key']:
+                keydict[entry['key_id'].strip('"')] = entry['secret'].strip('"')
+        except Exception as e:
+            logging.warning(f"{e}")
+            keydict = {}
+    if not keydict:
+        logging.warning(f"Loading dummy entry in keyring")
+        keydict = { '__.': 'invalid_invalid_invalid_invalid_' }
+    result = dns.tsigkeyring.from_text(keydict)
+    logging.debug(f"Loaded keyring: {result}")
+    return result
 
 
 def parse_http_response(response_bytes): # in use
@@ -215,6 +253,7 @@ def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, 
         with socket.create_connection((target or hostname, port)) as sock:
             with context.wrap_socket(sock, server_hostname=hostname, do_handshake_on_connect=False) as ssock:
                 try:
+                    status = None
                     ssock.do_handshake()
                     status = ssock.get_ech_status()
                     logging.debug("Handshake completed with ECH status: %s", ssock.get_ech_status().name)
@@ -298,23 +337,7 @@ def rectify(j):                 # in use
     return j
 
 
-def get_wkech(url, target=None): # in use
-    """Retrieve effective WKECH data, following alias if appropriate"""
-    logging.debug(f"Fetching WKECH data for url {url}")
-    parsed = urllib.parse.urlparse(url)
-    wkurl = f"{parsed.scheme}://{parsed.netloc}/.well-known/origin-svcb"
-    response = get(wkurl, target=target)
-    if response['status_code'] == 200: # or could test 'reason' for 'OK'
-        rectified = rectify(json.loads(response['body']))
-        if not rectified:
-            logging.warning(f"Data retrieved from {wkurl} is invalid")
-    else:
-        rectified = None
-        logging.warning(f"Unable to retrieve data from {wkurl}")
-    return rectified
-
-
-def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
+def check_wkech(hostname, regeninterval=3600, target=None, port=None) -> dict: # in use
     """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
     result = {
         'OK': False,            # until we know better
@@ -322,13 +345,13 @@ def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
     }                           # return value
     alias = None
     ech_configs = []
-    scheme = urllib.parse.urlparse(url).scheme
+    scheme = "https"
     if scheme not in ("http", "https"):
         logging.warning(f"Scheme '{scheme}' not supported")
         return result
 
-    hostname = urllib.parse.urlparse(url).hostname
-    port = urllib.parse.urlparse(url).port
+    # hostname = urllib.parse.urlparse(url).hostname
+    # port = urllib.parse.urlparse(url).port
     if not port or port in (443, 80):
         port = 443
     wkurl = f"{scheme}://{hostname}:{port}/.well-known/svcb-origin"
@@ -348,6 +371,7 @@ def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
         if depth > 1:
             logging.debug(f"HTTPS RRset chain (depth {depth}) found for '{svcbname}'")
         focus = chain[-1].rrset
+        logging.debug(f"Focus on RRset '{focus}'")
         rrs = list(filter(lambda a: a.rdtype == 65, focus))
         rrs.sort(key=lambda a: a.priority)
         select_rr = rrs[0]
@@ -379,7 +403,8 @@ def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
         rrset = wkech_to_HTTPS_rrset(svcbname, rectified, target=hostname)
         logging.debug(f"Generated RRset: {rrset[0]}")
         logging.debug(f"Published RRset: {chain[0].rrset}")
-        if rrset[0] != chain[0].rrset: # TODO: consider checking TTL also
+        if rrset[0] != chain[0].rrset or rrset[0].ttl != chain[0].rrset.ttl:
+            # TODO: consider whether to check TTL
             logging.debug(f"Generated RRset differs from published one")
 
             bad_endpoints = 0   # none seen yet
@@ -399,7 +424,7 @@ def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
                     # Visit target using just this config
                     cftally += 1
                     echstatus = probe_ech(hostname, port, None, ech_configs=[echconfig], target=target)
-                    logging.debug(f"Result from probing with ECHConfig {cftally}/{cfcount}: {echstatus.name}")
+                    logging.debug(f"Result from probing with ECHConfig {cftally}/{cfcount}: {echstatus}")
                     if echstatus != ssl.ECH_STATUS_SUCCESS:
                         bad_configs += 1
                     # Next echconfig
@@ -417,6 +442,24 @@ def check_wkech(url, regeninterval=3600, target=None) -> dict: # in use
             result['OK'] = True
 
     return result
+
+def check_wkech_by_url(url, regeninterval=3600, target=None) -> dict: # in use
+    """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
+    result = {
+        'OK': False,            # until we know better
+        'Update': []            # List of RRsets to update
+    }                           # return value
+    alias = None
+    ech_configs = []
+    scheme = urllib.parse.urlparse(url).scheme
+    if scheme not in ("http", "https"):
+        logging.warning(f"Scheme '{scheme}' not supported")
+        return result
+
+    hostname = urllib.parse.urlparse(url).hostname
+    port = urllib.parse.urlparse(url).port
+
+    return check_wkech(hostname, regeninterval=regeninterval, target=target, port=port)
 
 
 def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str, wkechdata: dict, target = None): # reference is earlier ???
@@ -470,9 +513,9 @@ def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str, wkechdata: dict, target = 
     return dns.zonefile.read_rrsets('\n'.join(rrset)) # List (singleton) of dns.rrset objects
 
 
-def prepare_update(url, target=None): # in use
+def prepare_update_by_url(url, target=None): # in use
     result = []
-    checked = check_wkech(url, target=target)
+    checked = check_wkech_by_url(url, target=target)
     if not checked['OK']:
         logging.warning(f"Validation failed for '{url}'")
     elif not checked['Update']:
@@ -489,6 +532,41 @@ def prepare_update(url, target=None): # in use
     return result
 
 
+def apply_update(hostname, port, target=None, keyconfig='/run/named/session.key'):
+    result = []
+    logging.debug(f"Processing update for ({hostname}, {port}, {target})")
+    checked = check_wkech(hostname, port=port, target=target)
+    if not checked['OK']:
+        logging.warning(f"Validation failed for ({hostname}, {port}, {target})")
+    elif not checked['Update']:
+        logging.info(f"No update needed for ({hostname}, {port}, {target})")
+    else:
+        keyring = load_keyring(keyconfig) # TODO: move to avoid repeated invocations
+        logging.debug(f"Loaded keyring: {keyring}")
+        for item in checked['Update']:
+            if not item:
+                continue
+            logging.debug(f"Preparing to apply update {repr(item)}")
+            logging.debug(f"  DETAIL:  hostname: '{item.name}'")
+            logging.debug(f"  DETAIL:      zone: '{dns.resolver.zone_for_name(item.name)}'")
+            logging.debug(f"  DETAIL:       TTL: '{item.ttl}'")
+            logging.debug(f"  DETAIL:     CLASS: '{item.rdclass.to_text(item.rdclass)}'")
+            logging.debug(f"  DETAIL:      TYPE: '{item.rdtype.to_text(item.rdtype)}'")
+            lupdate = dns.update.Update(dns.resolver.zone_for_name(item.name),
+                                        keyring=keyring, keyalgorithm=dns.tsig.HMAC_SHA256)
+            lupdate.replace(item.name, item.to_rdataset())
+            logging.info(f"Ready to apply update: {lupdate}")
+            if dns.name.from_text('__') in keyring:
+                logging.debug(f"Attempting update {repr(lupdate)} with invalid key")
+            try:
+                lresponse = dns.query.tcp(lupdate, ChosenResolver.active.nameservers[0].address, timeout=10)
+                logging.info(f"Update response: {lresponse}")
+            except dns.exception.DNSException as e:
+                logging.error(f"DNS Exception: {e}")
+                
+    return result
+
+
 def cmd_get(args) -> None:      # in use, but maybe not really
     """Retrieves data from a given URL."""
     print(get(args.url, args.force_grease))
@@ -500,44 +578,9 @@ class GetTarget(TypedDict):     # in use
     url: str
 
 
-def cmd_fetch(args) -> None:    # in use
-    """ Retrieve data from WKECH URL corresponding to given url """
-    url = args.url
-    loaded = get_wkech(url, args.alias)
-    if loaded:
-        while loaded:
-            print(f"WKECH data for {url}:")
-            print(json.dumps(loaded))
-            endpoints = loaded['endpoints']
-            loaded = None
-            for endpoint in endpoints:
-                if 'alias' in endpoint:
-                    url = f"{urllib.parse.urlparse(url).scheme}://{endpoint['alias']}"
-                    loaded = get_wkech(url)
-    else:
-        logging.warning(f"Found no WKECH data for {url}")
-
-
-def cmd_check_wkech(args) -> None: # in use
-    """ Retrieve data from WKECH URL and validate each ECHConfig found """
-    checked = check_wkech(args.url, target=args.alias)
-    if checked['OK']:
-        logging.info(f"Validation succeeded")
-        count = len(checked['Update'])
-        if count:
-            logging.info(f"{count} RRset{'s' if count > 1 else ''} must be updated for DNS to match WKECH data")
-        else:
-            logging.info(f"DNS matches WKECH data")
-
-
-def cmd_publish_rrset(args) -> None: # future work
-    """ Update DNS directly with HTTPS RRset from validated WKECH data """
-    # TODO: consider more elaborate interface for this command
-    logging.warning("This subcommand is not yet implemented")
-
-
 def run_batch(action, todo, delimiter=','):
-    with open(todo) as csvfile:
+    result = []
+    with open(todo, newline='') as csvfile:
         readCSV = csv.reader(csvfile, delimiter=delimiter)
         for row in readCSV:
             logging.debug(f"Parsing row from file '{todo}': {row}")
@@ -547,54 +590,67 @@ def run_batch(action, todo, delimiter=','):
                 continue               # and skip them
             alias = None
             port = None
-            thisurl = f"https://{row[0]}"
+            row = list(map(str.strip, row))
+            hostname = row[0]
             if len(row) > 2 and row[2]:
                 alias = str(row[2])
             if len(row) > 1 and row[1]:
                 port = int(row[1])
-            if port and port != 443:
-                thisurl += f":{port}/"
+            if action in [apply_update]:
+                result += action(hostname, port, target=alias)
             else:
-                thisurl += "/"
-            if alias:
-                logging.info(f"Processing URL {thisurl} (alias {alias})")
-            else:
-                logging.info(f"Processing URL {thisurl}")
-            #
-            # TODO: move print() to invoked function (perhaps wrapper around action)
-            #
-            update = action(thisurl, target=alias)
-            for command in update:
-                print(command)
+                thisurl = f"https://{hostname}"
+                if port and port != 443:
+                    thisurl += f":{port}/"
+                else:
+                    thisurl += "/"
+                if alias:
+                    logging.info(f"Processing URL {thisurl} (alias {alias})")
+                else:
+                    logging.info(f"Processing URL {thisurl}")
+                result += action(thisurl, target=alias)
+    return result
 
 
-def ready_batch(action, args):
+def launch_batch(action, args):
+    result = []
     url = args.url
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme in ['', 'csv']:
         descr = '(presumed CSV)' if not parsed.scheme else 'CSV'
         logging.info(f"Processing batch {descr} file: '{parsed.path}'")
-        run_batch(action, parsed.path)
+        result = run_batch(action, parsed.path)
     elif parsed.scheme in ['https']: # Maybe HTTP also?
         logging.info(f"Processing single URL '{url}'")
-        update = action(url, target=args.alias)
-        # TODO: move print() (se above)
-        for command in update:
-            print(command)
+        result = action(url, target=args.alias)
     else:
         logging.info(f"Scheme not supported: '{url}'")
+    for command in result:
+        print(command)
+
+
+def cmd_prepare_update_by_url(args) -> None: # in use
+    """ Prepare HTTPS Update (as input stream for BIND9 NSUPDATE) from validated WKECH data """
+    action = prepare_update_by_url
+    launch_batch(action, args)
 
 
 def cmd_prepare_update(args) -> None: # in use
     """ Prepare HTTPS Update (as input stream for BIND9 NSUPDATE) from validated WKECH data """
     action = prepare_update
-    ready_batch(action, args)
-    
+    launch_batch(action, args)
+
+
+def cmd_publish_rrset(args) -> None: # future work
+    """ Update DNS directly with HTTPS RRset from validated WKECH data """
+    logging.warning("The 'publish' subcommand is not yet implemented")
+    action = apply_update
+    run_batch(action, args.schedule)
 
 # def cmd_dummy(args) -> None:
 #     """ Dummy command handler for testing """
 #     action = prepare_update
-#     ready_batch(action, args)
+#     launch_batch(action, args)
 
 
 def main() -> None:
@@ -633,29 +689,17 @@ def main() -> None:
                                        help="URL with either 'https:' authority, or 'csv:' path to batch file"
                                        )
     prepare_update_parser.add_argument('--alias', '-a', nargs='?', default=None)
-    prepare_update_parser.set_defaults(func=cmd_prepare_update)
+    prepare_update_parser.set_defaults(func=cmd_prepare_update_by_url)
 
-    check_wkech_parser = subparsers.add_parser(
-        # "check_wkech",
-        "validate",
-        help="Fetch and validate WKECH data")
-    check_wkech_parser.add_argument("url", help="URL from which to construct WKECH URL")
-    check_wkech_parser.add_argument('--alias', '-a', nargs='?', default=None)
-    check_wkech_parser.set_defaults(func=cmd_check_wkech)
-
-    getwkech_parser = subparsers.add_parser(
-        # "getwkech",
-        "fetch",
-        help="Fetch WKECH data without validation")
-    getwkech_parser.add_argument("url",
-                                 # [alternative for list of URLs] nargs='*',
-                                 help="Origin URL from which to construct WKECH URL")
-    getwkech_parser.add_argument('--alias', '-a', nargs='?', default=None)
-    getwkech_parser.set_defaults(func=cmd_fetch)
-
-    # publish_rrset_parser = subparsers.add_parser("publish_rrset", help="Update DNS directly")
-    # publish_rrset_parser.add_argument("url", help="URL from which to construct WKECH URL")
-    # publish_rrset_parser.set_defaults(func=cmd_publish_rrset)
+    publish_rrset_parser = subparsers.add_parser(
+        "publish",
+        help="Validate WKECH for each origin and update DNS zone"
+    )
+    publish_rrset_parser.add_argument("schedule", help="file containing schedule of origins")
+    publish_rrset_parser.add_argument("--format", "-f", default="CSV",
+                                      help="format of schedule (CSV only for now)")
+    
+    publish_rrset_parser.set_defaults(func=cmd_publish_rrset)
 
     args = parser.parse_args()
     if args.nameserver:
@@ -677,12 +721,13 @@ def main() -> None:
     #     args.func(args.demo)
     #     return
 
-    try:
-        args.func(args)
-    except AttributeError as e:
-        logging.critical(
-            f"Error: Subcommand '{args.command}' was called, but it requires no additional arguments: {e}"
-        )
+    # try:
+    #     args.func(args)
+    # except AttributeError as e:
+    #     logging.critical(
+    #         f"Error: Subcommand '{args.command}' was called, but it requires no additional arguments: {e}"
+    #     )
+    args.func(args)
 
 
 if __name__ == "__main__":
