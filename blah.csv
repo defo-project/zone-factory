@@ -4,12 +4,13 @@
 ; and are skipped
 # as are empty lines
 
-; Fields:
-; hostname, port, alias endpoint
-my-own.net
+; Fields (all optional except hostname):
+; hostname, port, alias endpoint, regeninterval
+  my-own.net  
 
-my-own.net,8443
+  my-own.net  ,  8443  
 
-alias-no-ip.esni.defo.ie,,cover.ie
+# Note: missing field before another field must be represented by placeholder
+  alias-no-ip.esni.defo.ie,  ,  cover.ie, 1200
 
 ## -- ENDS --
