@@ -2,7 +2,7 @@
 
 # set -x
 
-# Copyright (C) 2023 Stephen Farrell, stephen.farrell@cs.tcd.ie
+# Copyright (C) 2025 Stephen Farrell, stephen.farrell@cs.tcd.ie
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -22,24 +22,25 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-# ECH keys update as per draft-ietf-tls-wkech-02
-# with the addition of 'regeninterval' to the JSON
-# and (so far) without support for the 'alias' option
+# ECH keys update as per draft-ietf-tls-wkech
 # This is a work-in-progress, DON'T DEPEND ON THIS!!
 
-# This script handles ECH key updating for an ECH front-end (in ECH split-mode),
-# back-end (e.g. web server) or zone factory (the thing that publishes DNS RRs
-# containing ECH public values).
-
 # variables/settings, some can be overwritten from environment
+
+# set HOME in case we're running from a cronjb
+: ${HOME:="/home/sftcd"}
 
 # where the ECH-enabled OpenSSL is built, needed if ECH-checking is enabled
 : ${OSSL:=$HOME/code/defo-project-org/openssl}
 export LD_LIBRARY_PATH=$OSSL
 
-# script to restart or reload configuations for front/back-end
-: ${BE_RESTARTER:=/home/sftcd/bin/be_restart.sh}
-: ${FE_RESTARTER:=/home/strcd/bin/fe_restart.sh}
+# Scripts to restart, or reload ECH configuations, for front/back-end.
+# It's ok to leave these blank if not needed, e.g. if FE/BE are the same
+# web server instance. Example content, for nginx might be:
+#    sudo /usr/sbin/nginx -s reload
+
+: ${BE_RESTARTER:=$HOME/bin/be_restart.sh}
+: ${FE_RESTARTER:=$HOME/bin/fe_restart.sh}
 
 # Top of ECH key file directories
 : ${ECHTOP:=$HOME/ech}
@@ -62,70 +63,53 @@ ECHOLD="$ECHDIR/old"
 REGENINTERVAL="3600" # 1 hour
 
 # Key filename convention is "*.ech" for key files but 
-# "*.pem.ech" for short-terms key files that'll be moved
+# "*.pem.ech" for short-term key files that'll be moved
 # aside
 
-# Long term key files, can be space-sep list if needed
-# These won't be expired out ever, and will be added to
-# the list of keys we ask be published. This is mostly
-# for testing.
+# Long term key files, that are always published, a space-sep list
+# These won't be expired out ever, and will be added to the list of
+# keys we ask be published. This is mostly for testing.
 : ${LONGTERMKEYS:="$ECHDIR/*.ech"}
 
 # default top of DocRoots
-# : ${DRTOP:="/var/www"}
+: ${DRTOP:="/var/www"}
 
-# key is FE Origin (host:port), value is DocRoot for that
+# Array key is FE host:port, value is DocRoot for that
+# with port 443 being the default, that can be included or omitted
 declare -A fe_arr=(
-    [cover.defo.ie]="$DRTOP/cover/"
-    [foo.ie:443]="$DRTOP/foo.ie/www/"
+    [cover.example.com]="$DRTOP/cover/"
 )
 
-# ipv4 and ipv6 hints per FE
+# ipv4 and ipv6 hints per FE, if desired - if none are
+# defined here, that ok, they won't end up in an HTTPS RR
 
 declare -A fe_ipv4s=(
-    [cover.defo.ie]="213.108.108.101"
+    [cover.example.com]="192.0.2.1"
 )
 
 declare -A fe_ipv6s=(
-    [cover.defo.ie]="2a00:c6c0:0:116:5::10"
+    [cover.example.com]="2001:db8::1"
 )
 
-# key is BE Origin (host:port), value is DocRoot for that
+# Similarly for BE
 declare -A be_arr=(
-    [defo.ie]="$DRTOP/defo.ie"
-    [alias.esni.defo.ie]="$DRTOP/alias.esni.defo.ie"
-    [alias-no-ip.esni.defo.ie]="$DRTOP/alias-no-ip.esni.defo.ie"
-    [draft-13.esni.defo.ie:8413]="$DRTOP/draft-13.esni.defo.ie/8413"
-    [draft-13.esni.defo.ie:8414]="$DRTOP/draft-13.esni.defo.ie/8414"
-    [draft-13.esni.defo.ie:9413]="$DRTOP/draft-13.esni.defo.ie/9413"
-    [draft-13.esni.defo.ie:10413]="$DRTOP/draft-13.esni.defo.ie/10413"
-    [draft-13.esni.defo.ie:11413]="$DRTOP/draft-13.esni.defo.ie/11413"
-    [draft-13.esni.defo.ie:12413]="$DRTOP/draft-13.esni.defo.ie/12413"
-    [draft-13.esni.defo.ie:12414]="$DRTOP/draft-13.esni.defo.ie/12414"
+    [foo.example.com]="$DRTOP/foo.example.com"
 )
 
 # key is BE Origin (host:port), value is space-sep list of DNS names,
 # or empty string (if we want a signal that ECH is not in use)
 # only backends that use aliases need have entries here
 declare -A be_alias_arr=(
-    [alias.esni.defo.ie]="cover.defo.ie cdn.example.net"
-    [alias-no-ip.esni.defo.ie]="cover.defo.ie cdn.example.net"
+    [hasalias.example.com]="cover.example.com cdn.example.com"
 )
 
 # key is BE Origin (host:port), value is alias DNS name, or empty string
 # only backends that use alpns need have entries here
 declare -A be_alpn_arr=(
-    [defo.ie]="h2,http/1.1"
-    [draft-13.esni.defo.ie:8413]="http/1.1"
-    [draft-13.esni.defo.ie:9413]="h2,http/1.1"
+    [foo.example.com]="h2,http/1.1"
 )
 
-# Fixed by draft but may change as we go
-WESTR="origin-svcb"
-FEWKECHDIR="$FEDOCROOT/.well-known"
-FEWKECHFILE="$FEDOCROOT/.well-known/$WESTR"
-
-# uid for writing files to DocRoot, whoever runs this script
+# UID/GID for writing files to DocRoot, whatever runs this script
 # needs to be able to sudo to that uid
 : ${WWWUSER:="www-data"}
 : ${WWWGRP:="www-data"}

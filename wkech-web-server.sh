@@ -36,66 +36,22 @@
 : ${OSSL:="$HOME/code/defo-project-org/openssl"}
 : ${ECHDT:="$HOME/code/defo-project-org/ech-dev-utils"}
 
+# File that sets specific variables/arrays of front-end and back-end
+# details.
+: ${VARSFILE:="wkech-web-server-vars.sh"}
+
 # variables/settings, some can be overwritten from environment all can be
 # over-ridden via a local wkech-web-server-vars.sh file to include
 # see explanations in wkech-web-server-vars.sh for details
-# 
-# : ${BE_RESTARTER:="$HOME/bin/be_restart.sh"}
-# : ${FE_RESTARTER:="$HOME/bin/fe_restart.sh"}
-# : ${ECHTOP:=$HOME/ech}
-# ECHDIR="$ECHTOP/echkeydir"
-# ECHOLD="$ECHDIR/old"
-# : ${REGENINTERVAL:="3600"} # 1 hour
-# : ${LONGTERMKEYS:="$ECHTOP/*.ech"}
-# : ${DRTOP:="$ECHTOP/docroots"}
-# declare -A fe_arr=(
-#     [example.com]="$DRTOP/eg/"
-#     [jell.ie]="$DRTOP/ji"
-# )
-# declare -A fe_ipv4s=(
-#     # because we use jq, you MUST NOT include spaces
-#     # between the values and you MUST include the quotes
-#     # as below.
-#     [example.com]='["192.0.2.1","192.0.2.254"]'
-#     [jell.ie]='["213.108.105.239"]'
-# )
-# declare -A fe_ipv6s=(
-#     # because we use jq, you MUST NOT include spaces
-#     # between the values and you MUST include the quotes
-#     # as below.
-#     [example.com]='["2001:DB::ec4"]'
-#     [jell.ie]='["2a00:c6c0:0:109:4::10"]'
-# )
-# declare -A be_arr=(
-#     [foo.example.com]="$DRTOP/f.eg"
-#     [foo.example.com:8443]="$DRTOP/f.eg.8443"
-#     [alias.example.com]="$DRTOP/a.eg"
-#     [empty.example.com]="$DRTOP/e.eg"
-#     [vps.jell.ie]="$DRTOP/je"
-# )
-# # Aliases also need to be mentioned in the be_arr
-# # above so that we know where their DocRoot lives.
-# # An empty value on the RHS here will (all going
-# # well) result in publishing a "no HTTPS stuff" RR.
-# # TODO: is DELETE reasonable
-# declare -A be_alias_arr=(
-#     [alias.example.com]="lb.example.com"
-#     [empty.example.com]="DELETE"
-# )
-# declare -A be_alpn_arr=(
-#     # because we use jq, you MUST NOT include spaces
-#     # between the values and you MUST include the quotes
-#     # as below.
-#     [foo.example.com]='["h2","http/1.1"]'
-#     [foo.example.com:8443]='["h2","h3"]'
-# )
-# WESTR="origin-svcb"
-# : ${WWWUSER:="`whoami`"}
-# : ${WWWGRP:="`whoami`"}
-# 
-# these set the list of things managed, directory names, timings,
-# and names of scripts to run to re-start things if needed
-. wkech-web-server-vars.sh
+if [ ! -f "$VARSFILE" ]
+then
+    echo "Can't read $VARSFILE - exiting"
+    exit 99
+fi
+. "$VARSFILE"
+
+# Fixed by draft
+WESTR="origin-svcb"
 
 # more paths, possibly partly overidden
 export LD_LIBRARY_PATH=$OSSL
@@ -696,7 +652,7 @@ then
     # restart services that support key rotation
     if [[ $ROLES == *"$FESTR"* ]]
     then
-        if [ -f $FE_RESTARTER ]
+        if [[ "$FE_RESTARTER" != "" && -f $FE_RESTARTER ]]
         then
             echo "Took action - better restart frontend services"
             $FE_RESTARTER
@@ -704,7 +660,7 @@ then
     fi
     if [[ $ROLES == *"$BESTR"* ]]
     then
-        if [ -f $BE_RESTARTER ]
+        if [[ "$BE_RESTARTER" != "" && -f $BE_RESTARTER ]]
         then
             echo "Took action - better restart backend services"
             $BE_RESTARTER
