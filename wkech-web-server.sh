@@ -299,7 +299,7 @@ then
     # check/make docroot and .well-known if needed
     for feor in "${!fe_arr[@]}"
     do
-        #echo "FE origin: $feor, DocRoot: ${fe_arr[${feor}]}"
+        # echo "FE origin: $feor, DocRoot: ${fe_arr[${feor}]}"
         fedr=${fe_arr[${feor}]}
         fewkechdir=$fedr/.well-known/
         if [ ! -d $fewkechdir ]
@@ -321,6 +321,10 @@ then
     for beor in "${!be_arr[@]}"
     do
         bedr=${be_arr[${beor}]}
+        if [ ! -d $bedr ]
+        then
+            sudo -u $WWWUSER mkdir -p $bedr
+        fi
         if [[ ! -d $bedr ]]
         then
             echo "DocRoot for $beor ($bedr) missing - exiting"
@@ -476,7 +480,14 @@ then
             mergefiles="$newf"
         else
             # include long-term keys, if any
-            mergefiles="$LONGTERMKEYS"
+            mergefiles=""
+            if compgen -G "$LONGTERKEYS" >/dev/null 2>&1
+            then
+                for file in $LONGTERMKEYS
+                do
+                    mergefiles=" $mergefiles $file"
+                done
+            fi
             for file in $ECHDIR/$fehost.$feport/*.pem.ech
             do
                 fage=$(fileage $file)
@@ -508,13 +519,13 @@ then
             cfgips=${fe_ipv4s[${feor}]}
             if [[ "$cfgips" != "" ]]
             then
-                ipv4str="\"ipv4hint\" : $cfgips"
+                ipv4str="\"ipv4hint\" : \"$cfgips\""
             fi
             ipv6str=""
             cfgips=${fe_ipv6s[${feor}]}
             if [[ "$cfgips" != "" ]]
             then
-                ipv6str="\"ipv6hint\" : $cfgips"
+                ipv6str="\"ipv6hint\" : \"$cfgips\""
             fi
             # for a FE we don't bother with alpn
             alpnstr=""
@@ -607,7 +618,7 @@ then
 	        if [[ "$alpnval" != "" ]]
 	        then
 	            TMPF1=`mktemp`
-                jq --argjson p "$alpnval" '.endpoints[].params.alpn += $p' $lmf >$TMPF1
+                jq --argjson p '"'$alpnval'"' '.endpoints[].params.alpn += $p' $lmf >$TMPF1
 	            jres=$?
 	            if [[ "$jres" == 0 ]]
 	            then
