@@ -33,12 +33,12 @@
 # no how to get that working is: https://github.com/defo-project 
 
 # Paths that  can be overidden
-: ${OSSL:="$HOME/code/defo-project-org/openssl"}
-: ${ECHDT:="$HOME/code/defo-project-org/ech-dev-utils"}
+: "${OSSL:=$HOME/code/defo-project-org/openssl}"
+: "${ECHDT:=$HOME/code/defo-project-org/ech-dev-utils}"
 
 # File that sets specific variables/arrays of front-end and back-end
 # details.
-: ${VARSFILE:="wkech-web-server-vars.sh"}
+: "${VARSFILE:=wkech-web-server-vars.sh}"
 
 # variables/settings, some can be overwritten from environment all can be
 # over-ridden via a local wkech-web-server-vars.sh file to include
@@ -48,7 +48,8 @@ then
     echo "Can't read $VARSFILE - exiting"
     exit 99
 fi
-. "$VARSFILE"
+# shellcheck source=./wkech-web-server-vars.sh
+. "${VARSFILE}"
 
 # Fixed by draft
 WESTR="origin-svcb"
@@ -85,7 +86,7 @@ function hostport2host()
       *:*) host=${1%:*} port=${1##*:};;
         *) host=$1      port=$DEFPORT;;
     esac
-    echo $host
+    echo "$host"
 }
 
 function hostport2port()
@@ -94,7 +95,7 @@ function hostport2port()
       *:*) host=${1%:*} port=${1##*:};;
         *) host=$1      port=$DEFPORT;;
     esac
-    echo $port
+    echo "$port"
 }
 
 # Make the JSON structure to be published at a wkech .well-known 
@@ -110,7 +111,7 @@ function makesvcjson()
     if [[ "$ipv4str" == ""  && "$echstr" == "" \
         && "$ipv6str" == "" && "$alpnstr" == "" ]]
     then
-        cat <<EOF >$file
+        cat <<EOF >"$file"
 {
  "regeninterval" : $dur,
  "endpoints": []
@@ -120,14 +121,20 @@ EOF
     fi
     NL=$',\n      '
     c2=""
-    if [ "$alpnstr" != "" ] && ([ "$ipv6str" != "" ] || [ "$echstr" != "" ] || [ "$ipv4str" != "" ])
+    if [ "$alpnstr" != "" ]
     then
-        c2=$NL
+        if [ "$ipv6str" != "" ] || [ "$echstr" != "" ] || [ "$ipv4str" != "" ]
+        then
+            c2=$NL
+        fi
     fi
     c1=""
-    if [ "$ipv6str" != "" ] && ([ "$echstr" != "" ] || [ "$ipv4str" != "" ])
+    if [ "$ipv6str" != "" ]
     then
-        c1=$NL
+        if [ "$echstr" != "" ] || [ "$ipv4str" != "" ]
+        then
+            c1=$NL
+        fi
     fi
     c0=""
     if [ "$echstr" != "" ] && [ "$ipv4str" != "" ]
@@ -139,7 +146,7 @@ EOF
     then
         lpriostr='"priority" : '$priostr$',\n    '
     fi
-    cat <<EOF >$file
+    cat <<EOF >"$file"
 {
  "regeninterval" : $dur,
  "endpoints" : [ {
@@ -160,7 +167,7 @@ function makealiasjson()
 
     if [ "$aliasstr" == "" ] 
     then
-        cat <<EOF >$file
+        cat <<EOF >"$file"
 {
  "regeninterval" : $dur,
  "endpoints": []
@@ -168,7 +175,7 @@ function makealiasjson()
 EOF
         return
     fi
-    cat <<EOF >$file
+    cat <<EOF >"$file"
 {
  "regeninterval" : $dur,
  "endpoints" : [{
@@ -223,7 +230,6 @@ done
 # variables that can be influenced by command line options
 
 # Various multiples/fractions of REGENINTERVAL
-duro2=$((REGENINTERVAL/2))
 dur=$REGENINTERVAL
 durt2=$((REGENINTERVAL*2))
 durt3=$((REGENINTERVAL*3 + 60)) # allow a bit of leeway
@@ -252,19 +258,19 @@ if [[ $ROLES == *"$FESTR"* ]]
 then
 
     # check that the that OpenSSL build is built
-    if [ ! -f $OSSL/apps/openssl ]
+    if [ ! -f "$OSSL/apps/openssl" ]
     then
         echo "OpenSSL not built - exiting"
         exit 5
     fi
     # check for another script we need
-    if [ ! -f $ECHDT/scripts/mergepems.sh ]
+    if [ ! -f "$ECHDT/scripts/mergepems.sh" ]
     then
         echo "$ECHDT/scripts/mergepems.sh not seen - exiting"
         exit 6
     fi
     # check that our OpenSSL build supports ECH
-    $OSSL/apps/openssl ech -help >/dev/null 2>&1
+    "$OSSL/apps/openssl" ech -help >/dev/null 2>&1
     eres=$?
     if [[ "$eres" != "0" ]]
     then
@@ -273,25 +279,25 @@ then
     fi
 
     # check/make various directories
-    if [ ! -d $ECHTOP ]
+    if [ ! -d "$ECHTOP" ]
     then
         echo "$ECHTOP ECH key dir missing - exiting"
         exit 7
     fi
-	if [ ! -d $ECHDIR ]
+	if [ ! -d "$ECHDIR" ]
 	then
-	    mkdir -p $ECHDIR
+	    mkdir -p "$ECHDIR"
 	fi
-	if [ ! -d $ECHDIR ]
+	if [ ! -d "$ECHDIR" ]
 	then
 	    echo "$ECHDIR missing - exiting"
 	    exit 12
 	fi
-	if [ ! -d $ECHOLD ]
+	if [ ! -d "$ECHOLD" ]
 	then
-	    mkdir -p $ECHOLD
+	    mkdir -p "$ECHOLD"
 	fi
-	if [ ! -d $ECHOLD ]
+	if [ ! -d "$ECHOLD" ]
 	then
 	    echo "$ECHOLD missing - exiting"
 	    exit 13
@@ -302,16 +308,16 @@ then
         # echo "FE origin: $feor, DocRoot: ${fe_arr[${feor}]}"
         fedr=${fe_arr[${feor}]}
         fewkechdir=$fedr/.well-known/
-        if [ ! -d $fewkechdir ]
+        if [ ! -d "$fewkechdir" ]
         then
-            sudo -u $WWWUSER mkdir -p $fewkechdir
+            sudo -u "$WWWUSER" mkdir -p "$fewkechdir"
         fi
-        if [ ! -d $fewkechdir ]
+        if [ ! -d "$fewkechdir" ]
         then
             echo "$fedr - $fewkechdir missing - exiting"
             exit 14
         fi
-        sudo chown -R $WWWUSER:$WWWGRP $fewkechdir
+        sudo chown -R "$WWWUSER:$WWWGRP" "$fewkechdir"
     done
 fi
 
@@ -321,37 +327,37 @@ then
     for beor in "${!be_arr[@]}"
     do
         bedr=${be_arr[${beor}]}
-        if [ ! -d $bedr ]
+        if [ ! -d "$bedr" ]
         then
-            sudo -u $WWWUSER mkdir -p $bedr
+            sudo -u "$WWWUSER" mkdir -p "$bedr"
         fi
-        if [[ ! -d $bedr ]]
+        if [[ ! -d "$bedr" ]]
         then
             echo "DocRoot for $beor ($bedr) missing - exiting"
             exit 9
         fi
-        sudo -u $WWWUSER ls $bedr >/dev/null
+        sudo -u "$WWWUSER" ls "$bedr" >/dev/null
         sres=$?
         if [[ "$sres" != "0" ]]
         then
             echo "Can't sudo to $WWWUSER to read $bedr - exiting"
             exit 10
         fi
-        if [ ! -d $bedr/.well-known ]
+        if [ ! -d "$bedr/.well-known" ]
         then
-            sudo -u $WWWUSER mkdir -p $bedr/.well-known/
+            sudo -u "$WWWUSER" mkdir -p "$bedr/.well-known/"
         fi
-        if [ ! -f $bedr/.well-known/$WESTR ]
+        if [ ! -f "$bedr/.well-known/$WESTR" ]
         then
-            sudo -u $WWWUSER touch $bedr/.well-known/$WESTR
+            sudo -u "$WWWUSER" touch "$bedr/.well-known/$WESTR"
         fi
-        if [ ! -f $bedr/.well-known/$WESTR ]
+        if [ ! -f "$bedr/.well-known/$WESTR" ]
         then
             echo "Failed sudo'ing to $WWWUSER to make $bedr/.well-known/$WESTR - exiting"
             exit 15
         fi
     done
-    wns=`which jq`
+    wns=$(which jq)
     if [[ "$wns" == "" ]]
     then
         echo "Can't see jq - exiting"
@@ -367,8 +373,8 @@ then
         echo "Checking if new ECHKeys needed for $feor"
         actiontaken="false"
 
-        feport=$(hostport2port $feor)
-        fehost=$(hostport2host $feor)
+        feport=$(hostport2port "$feor")
+        fehost=$(hostport2host "$feor")
         fedr=${fe_arr[${feor}]}
         fewkechfile=$fedr/.well-known/$WESTR
 
@@ -398,11 +404,11 @@ then
         fi
         echo "Keys deleted when older than $durt5"
 
-        if [ ! -d $ECHDIR/$fehost.$feport ]
+        if [ ! -d "$ECHDIR/$fehost.$feport" ]
         then
-            mkdir -p $ECHDIR/$fehost.$feport
+            mkdir -p "$ECHDIR/$fehost.$feport"
         fi
-        if [ ! -d $ECHDIR/$fehost.$feport ]
+        if [ ! -d "$ECHDIR/$fehost.$feport" ]
         then
             echo "Can't see $ECHDIR/$fehost.$feport - exiting"
             exit 25
@@ -411,11 +417,11 @@ then
 
         for file in $files2check
         do
-            if [ ! -f $file ]
+            if [ ! -f "$file" ]
             then
                 continue
             fi
-            fage=$(fileage $file)
+            fage=$(fileage "$file")
             #echo "$file is $fage old"
             if ((fage < newest))
             then
@@ -430,7 +436,7 @@ then
             if ((fage > durt3))
             then
                 echo "$file is old, (age==$fage >= $durt3)... moving to $ECHOLD"
-                mv $file $ECHOLD
+                mv "$file" "$ECHOLD"
                 actiontaken="true"
                 someactiontaken="true"
             fi
@@ -443,26 +449,26 @@ then
         oldies="$ECHOLD/*"
         for file in $oldies
         do
-            if [ ! -f $file ]
+            if [ ! -f "$file" ]
             then
                 continue
             fi
-            fage=$(fileage $file)
+            fage=$(fileage "$file")
             if ((fage >= durt5))
             then
-                rm -f $file
+                rm -f "$file"
             fi
         done
 
-        keyn="ech`date +%s`"
+        keyn="ech$(date +%s)"
 
         if ((newest >= (dur-1)))
         then
             echo "Time for a new key pair (newest as old or older than $dur)"
-            $OSSL/apps/openssl ech \
+            "$OSSL/apps/openssl" ech \
                 -ech_version 0xfe0d \
-                -public_name $fehost \
-                -out $ECHDIR/$fehost.$feport/$keyn.pem.ech
+                -public_name "$fehost" \
+                -out "$ECHDIR/$fehost.$feport/$keyn.pem.ech"
             res=$?
             if [[ "$res" != "0" ]]
             then
@@ -471,7 +477,7 @@ then
             fi
             actiontaken="true"
             someactiontaken="true"
-            newf=$ECHDIR/$fehost.$feport/$keyn.pem.ech
+            newf="$ECHDIR/$fehost.$feport/$keyn.pem.ech"
         fi
 
         if [[ "$JUSTONE" == "yes" ]]
@@ -481,16 +487,16 @@ then
         else
             # include long-term keys, if any
             mergefiles=""
-            if compgen -G "$LONGTERKEYS" >/dev/null 2>&1
+            if compgen -G "$LONGTERMKEYS" >/dev/null 2>&1
             then
                 for file in $LONGTERMKEYS
                 do
                     mergefiles=" $mergefiles $file"
                 done
             fi
-            for file in $ECHDIR/$fehost.$feport/*.pem.ech
+            for file in "$ECHDIR/$fehost.$feport/"*.pem.ech
             do
-                fage=$(fileage $file)
+                fage=$(fileage "$file")
                 if ((fage > durt2))
                 then
                     # skip that one, we'll accept/decrypt based on that
@@ -502,7 +508,7 @@ then
         fi
 
         TMPF="$ECHDIR/$fehost.$feport/latest-merged"
-        if [ ! -f $TMPF ]
+        if [ ! -f "$TMPF" ]
         then
             actiontaken="true"
             someactiontaken="true"
@@ -510,10 +516,10 @@ then
         if [[ "$actiontaken" != "false" ]]
         then
             echo "Merging these files for publication: $mergefiles"
-            $ECHDT/scripts/mergepems.sh -o $TMPF $mergefiles
-            echconfiglist=`cat $TMPF \
-                | sed '/BEGIN ECHCONFIG/,/END ECHCONFIG/{//!b};d' | tr -d '\n'`
-            rm -f $TMPF
+            "$ECHDT/scripts/mergepems.sh" -o "$TMPF" $mergefiles
+            echconfiglist=$(sed '/BEGIN ECHCONFIG/,/END ECHCONFIG/{//!b};d' \
+                "$TMPF" | tr -d '\n')
+            rm -f "$TMPF"
             echstr="\"ech\" : \"$echconfiglist\""
             ipv4str=""
             cfgips=${fe_ipv4s[${feor}]}
@@ -530,12 +536,12 @@ then
             # for a FE we don't bother with alpn
             alpnstr=""
 
-            TMPF1=`mktemp`
+            TMPF1=$(mktemp)
             makesvcjson "$TMPF1" "$dur" "1" \
                 "$ipv4str" "$echstr" "$ipv6str" "$alpnstr"
-            sudo mv $TMPF1 $fewkechfile
-            sudo chown $WWWUSER:$WWWGRP $fewkechfile
-            sudo chmod a+r $fewkechfile
+            sudo mv "$TMPF1" "$fewkechfile"
+            sudo chown "$WWWUSER:$WWWGRP" "$fewkechfile"
+            sudo chmod a+r "$fewkechfile"
         fi
     done
 fi
@@ -547,19 +553,19 @@ then
         echo "Checking $beor"
         bedr=${be_arr[${beor}]}
         wkechfile=$bedr/.well-known/$WESTR
-        behost=$(hostport2host $beor)
-        beport=$(hostport2port $beor)
-        if [ ! -d $ECHDIR/$behost.$beport ]
+        behost=$(hostport2host "$beor")
+        beport=$(hostport2port "$beor")
+        if [ ! -d "$ECHDIR/$behost.$beport" ]
         then
-            mkdir -p $ECHDIR/$behost.$beport
+            mkdir -p "$ECHDIR/$behost.$beport"
         fi
-        if [ ! -d $ECHDIR/$behost.$beport ]
+        if [ ! -d "$ECHDIR/$behost.$beport" ]
         then
             echo "Can't see $ECHDIR/$behost.$beport - exiting"
             exit 25
         fi
-        lmf=$ECHDIR/$behost.$beport/latest-merged
-        rm -f $lmf
+        lmf="$ECHDIR/$behost.$beport/latest-merged"
+        rm -f "$lmf"
         # is there an alias entry for this BE?
         if [[ -z ${be_alias_arr[${beor}]} ]]
         then
@@ -569,19 +575,20 @@ then
             echo "Setting up service mode for $beor"
 	        for feor in "${!fe_arr[@]}"
 	        do
-	            fehost=$(hostport2host $feor)
-	            feport=$(hostport2port $feor)
-	            TMPF=`mktemp`
+	            fehost=$(hostport2host "$feor")
+	            feport=$(hostport2port "$feor")
+	            TMPF=$(mktemp)
 	            if [[ $ROLES == *"$FESTR"* ]]
 	            then
 	                # shared-mode, FE JSON file is local
 	                fedr=${fe_arr[${feor}]}
 	                fewkechfile=$fedr/.well-known/$WESTR
-	                cp $fewkechfile $TMPF
+	                cp "$fewkechfile" "$TMPF"
 	            else
 	                # split-mode, FE JSON file is non-local
-	                timeout $CURLTIMEOUT curl -o $TMPF \
-                        -s https://$feor/.well-known/$WESTR
+	                timeout "$CURLTIMEOUT" curl -o "$TMPF" \
+                        -s "https://$feor/.well-known/$WESTR"
+                    tres=$?
 	                if [[ "$tres" == "124" ]]
 	                then
 	                    # timeout returns 124 if it timed out, or else the
@@ -591,25 +598,25 @@ then
 	                    exit 23
 	                fi
 	            fi
-	            if [ ! -f $TMPF ]
+	            if [ ! -f "$TMPF" ]
 	            then
 	                echo "Empty result from https://$feor/.well-known/$WESTR"
 	                continue
 	            fi
 	            # merge into latest
-	            if [ ! -f $lmf ]
+	            if [ ! -f "$lmf" ]
 	            then
-	                cp $TMPF $lmf
+	                cp "$TMPF" "$lmf"
 	            else
-	                TMPF1=`mktemp`
+	                TMPF1=$(mktemp)
 	                jq -n '{ endpoints: [ inputs.endpoints ] | add }' \
-                        $lmf $TMPF >$TMPF1
+                        "$lmf" "$TMPF" >"$TMPF1"
 	                jres=$?
 	                if [[ "$jres" == 0 ]]
 	                then
-	                    mv $TMPF1 $lmf
+	                    mv "$TMPF1" "$lmf"
 	                else
-	                    rm -f $TMPF1
+	                    rm -f "$TMPF1"
 	                fi
 	            fi
 	        done
@@ -617,14 +624,14 @@ then
 	        alpnval=${be_alpn_arr[${beor}]}
 	        if [[ "$alpnval" != "" ]]
 	        then
-	            TMPF1=`mktemp`
-                jq --argjson p '"'$alpnval'"' '.endpoints[].params.alpn += $p' $lmf >$TMPF1
+	            TMPF1=$(mktemp)
+                jq --argjson p '"'"$alpnval"'"' '.endpoints[].params.alpn += $p' "$lmf" >"$TMPF1"
 	            jres=$?
 	            if [[ "$jres" == 0 ]]
 	            then
-	                mv $TMPF1 $lmf
+	                mv "$TMPF1" "$lmf"
 	            else
-	                rm -f $TMPF1
+	                rm -f "$TMPF1"
 	            fi
 	        fi
 
@@ -645,13 +652,13 @@ then
 
         fi
 
-        newcontent=`diff -q $wkechfile $lmf`
-        if [[ -f $lmf && "$newcontent" != "" ]]
+        newcontent=$(diff -q "$wkechfile" "$lmf")
+        if [[ -f "$lmf" && "$newcontent" != "" ]]
         then
             # copy to DocRoot
-            sudo cp $lmf $wkechfile
-            sudo chown $WWWUSER:$WWWGRP $wkechfile
-            sudo chmod a+r $wkechfile
+            sudo cp "$lmf" "$wkechfile"
+            sudo chown "$WWWUSER:$WWWGRP" "$wkechfile"
+            sudo chmod a+r "$wkechfile"
             someactiontaken="true"
         fi
 
