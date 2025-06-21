@@ -28,10 +28,10 @@
 # variables/settings, some can be overwritten from environment
 
 # set HOME in case we're running from a cronjb
-: ${HOME:="/home/sftcd"}
+: "${HOME:=/home/sftcd}"
 
 # where the ECH-enabled OpenSSL is built, needed if ECH-checking is enabled
-: ${OSSL:=$HOME/code/defo-project-org/openssl}
+: "${OSSL:=$HOME/code/defo-project-org/openssl}"
 export LD_LIBRARY_PATH=$OSSL
 
 # Scripts to restart, or reload ECH configuations, for front/back-end.
@@ -39,14 +39,14 @@ export LD_LIBRARY_PATH=$OSSL
 # web server instance. Example content, for nginx might be:
 #    sudo /usr/sbin/nginx -s reload
 
-: ${BE_RESTARTER:=$HOME/bin/be_restart.sh}
-: ${FE_RESTARTER:=$HOME/bin/fe_restart.sh}
+: "${BE_RESTARTER:=$HOME/bin/be_restart.sh}"
+: "${FE_RESTARTER:=$HOME/bin/fe_restart.sh}"
 
 # Top of ECH key file directories
-: ${ECHTOP:=$HOME/ech}
+: "${ECHTOP:=$HOME/ech}"
 
 # This is where most or all $REGENINTERVAL-lived ECH keys live
-# When they get to 2*$REGENINTERVAL old they'll be moved to $ECHOLD
+# When they get to 2*$REGENINTERVAL old they'll be moved to ECHOLD
 ECHDIR="$ECHTOP/echkeydir"
 # Where old stuff goes
 ECHOLD="$ECHDIR/old"
@@ -56,7 +56,7 @@ ECHOLD="$ECHDIR/old"
 # load to server) old keys after 3 x this duration.
 # So, keys remain usable for 3 x this, and are visible to the
 # Internet for 2 x this. 
-# Old keys are just moved into $ECHOLD for now and are deleted
+# Old keys are just moved into ECHOLD for now and are deleted
 # once they're 5 x this duration old.
 # We request a TTL for that the RR containing keys be half 
 # this duration.
@@ -72,7 +72,7 @@ REGENINTERVAL="3600" # 1 hour
 : ${LONGTERMKEYS:="$ECHDIR/*.ech"}
 
 # default top of DocRoots
-: ${DRTOP:="/var/www"}
+: "${DRTOP:=/var/www}"
 
 # Array key is FE host:port, value is DocRoot for that
 # with port 443 being the default, that can be included or omitted
@@ -111,6 +111,6 @@ declare -A be_alpn_arr=(
 
 # UID/GID for writing files to DocRoot, whatever runs this script
 # needs to be able to sudo to that uid
-: ${WWWUSER:="www-data"}
-: ${WWWGRP:="www-data"}
+: "${WWWUSER:=www-data}"
+: "${WWWGRP:=www-data}"
 
