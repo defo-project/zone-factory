@@ -70,6 +70,9 @@ JUSTONE="no"
 # yeah, 443 is the winner:-)
 DEFPORT=443
 
+# we need to use different args for jq 1.6 vs. 1.7 (at least)
+JQVER=""
+
 function whenisitagain()
 {
     /bin/date -u +%Y%m%d-%H%M%S
@@ -363,6 +366,7 @@ then
         echo "Can't see jq - exiting"
         exit 11
     fi
+    JQVER=$(jq --version)
 fi
 
 if [[ $ROLES == *"$FESTR"* ]]
@@ -625,8 +629,15 @@ then
 	        if [[ "$alpnval" != "" ]]
 	        then
 	            TMPF1=$(mktemp)
-                jq --argjson p '"'"$alpnval"'"' '.endpoints[].params.alpn += $p' "$lmf" >"$TMPF1"
-	            jres=$?
+                if [[ "$JQVER" == "jq-1.6" ]]
+                then
+                    # 1.6 version
+                    jq --argjson p "$alpnval" '.endpoints[].params.alpn += $p' "$lmf" >"$TMPF1"
+                else
+                    # 1.7 version
+                    jq --argjson p '"'"$alpnval"'"' '.endpoints[].params.alpn += $p' "$lmf" >"$TMPF1"
+                fi
+                jres=$?
 	            if [[ "$jres" == 0 ]]
 	            then
 	                mv "$TMPF1" "$lmf"
