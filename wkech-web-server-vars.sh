@@ -69,7 +69,7 @@ REGENINTERVAL="3600" # 1 hour
 # Long term key files, that are always published, a space-sep list
 # These won't be expired out ever, and will be added to the list of
 # keys we ask be published. This is mostly for testing.
-: ${LONGTERMKEYS:="$ECHDIR/*.ech"}
+: "${LONGTERMKEYS:=$ECHDIR/*.ech}"
 
 # default top of DocRoots
 : "${DRTOP:=/var/www}"
@@ -84,11 +84,11 @@ declare -A fe_arr=(
 # defined here, that ok, they won't end up in an HTTPS RR
 
 declare -A fe_ipv4s=(
-    [cover.example.com]="192.0.2.1"
+    [cover.example.com]="192.0.2.1,192.0.2.2"
 )
 
 declare -A fe_ipv6s=(
-    [cover.example.com]="2001:db8::1"
+    [cover.example.com]="2001:db8::1,2001:db8::dead"
 )
 
 # Similarly for BE
@@ -104,7 +104,8 @@ declare -A be_alias_arr=(
 )
 
 # key is BE Origin (host:port), value is alias DNS name, or empty string
-# only backends that use alpns need have entries here
+# only backends that use alpns need have entries here, we assume there's
+# no need to manage alpns for front-ends
 declare -A be_alpn_arr=(
     [foo.example.com]="h2,http/1.1"
 )

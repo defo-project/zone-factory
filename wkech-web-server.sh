@@ -63,15 +63,16 @@ BESTR="be"
 # default roles, works for shared-mode client-facing and backed instance
 ROLES="$FESTR,$BESTR"
 
+# if our ROLE is only BE then we'll use curl to try grab a .well-knonw
+# from the configured FE using curl, so we need a timeout
+CURLTIMEOUT=10
+
 # whether to only make one public key available for publication
 # from front-end .well-known
 JUSTONE="no"
 
 # yeah, 443 is the winner:-)
 DEFPORT=443
-
-# we need to use different args for jq 1.6 vs. 1.7 (at least)
-JQVER=""
 
 function whenisitagain()
 {
@@ -99,6 +100,33 @@ function hostport2port()
         *) host=$1      port=$DEFPORT;;
     esac
     echo "$port"
+}
+
+function makecheckdir()
+{
+    user="$1"
+    group="$2"
+    dir="$3"
+
+	if [ ! -d "$dir" ]
+	then
+	    sudo -u "$user" mkdir -p "$dir"
+	fi
+	if [ ! -d "$dir" ]
+	then
+	    echo "$dir missing - exiting"
+	    exit 114
+	fi
+    sudo chown "$user:$group" "$dir"
+}
+
+# produce a JSON array of strings, given an input CSV
+# we do not support any escaping
+function csv2jarr()
+{
+    qcsv=${1//,/\",\"}
+    output="[\"$qcsv\"]"
+    echo "$output"
 }
 
 # Make the JSON structure to be published at a wkech .well-known 
@@ -238,9 +266,8 @@ durt2=$((REGENINTERVAL*2))
 durt3=$((REGENINTERVAL*3 + 60)) # allow a bit of leeway
 durt5=$((REGENINTERVAL*5))
 
-
-# set this if we did something that needs e.g. a server restart
-someactiontaken="false"
+# set this if we did something that needs e.g. a server restart/reload
+restartactiontaken="false"
 
 # sanity checks
 
@@ -280,47 +307,21 @@ then
         echo "OpenSSL not built with ECH - exiting"
         exit 8
     fi
-
     # check/make various directories
     if [ ! -d "$ECHTOP" ]
     then
         echo "$ECHTOP ECH key dir missing - exiting"
         exit 7
     fi
-	if [ ! -d "$ECHDIR" ]
-	then
-	    mkdir -p "$ECHDIR"
-	fi
-	if [ ! -d "$ECHDIR" ]
-	then
-	    echo "$ECHDIR missing - exiting"
-	    exit 12
-	fi
-	if [ ! -d "$ECHOLD" ]
-	then
-	    mkdir -p "$ECHOLD"
-	fi
-	if [ ! -d "$ECHOLD" ]
-	then
-	    echo "$ECHOLD missing - exiting"
-	    exit 13
-	fi
+    makecheckdir "$USER" "$USER" "$ECHDIR"
+    makecheckdir "$USER" "$USER" "$ECHOLD"
     # check/make docroot and .well-known if needed
     for feor in "${!fe_arr[@]}"
     do
         # echo "FE origin: $feor, DocRoot: ${fe_arr[${feor}]}"
         fedr=${fe_arr[${feor}]}
         fewkechdir=$fedr/.well-known/
-        if [ ! -d "$fewkechdir" ]
-        then
-            sudo -u "$WWWUSER" mkdir -p "$fewkechdir"
-        fi
-        if [ ! -d "$fewkechdir" ]
-        then
-            echo "$fedr - $fewkechdir missing - exiting"
-            exit 14
-        fi
-        sudo chown -R "$WWWUSER:$WWWGRP" "$fewkechdir"
+        makecheckdir "$WWWUSER" "$WWWGRP" "$fewkechdir"
     done
 fi
 
@@ -330,26 +331,7 @@ then
     for beor in "${!be_arr[@]}"
     do
         bedr=${be_arr[${beor}]}
-        if [ ! -d "$bedr" ]
-        then
-            sudo -u "$WWWUSER" mkdir -p "$bedr"
-        fi
-        if [[ ! -d "$bedr" ]]
-        then
-            echo "DocRoot for $beor ($bedr) missing - exiting"
-            exit 9
-        fi
-        sudo -u "$WWWUSER" ls "$bedr" >/dev/null
-        sres=$?
-        if [[ "$sres" != "0" ]]
-        then
-            echo "Can't sudo to $WWWUSER to read $bedr - exiting"
-            exit 10
-        fi
-        if [ ! -d "$bedr/.well-known" ]
-        then
-            sudo -u "$WWWUSER" mkdir -p "$bedr/.well-known/"
-        fi
+        makecheckdir "$WWWUSER" "$WWWGRP" "$bedr/.well-known"
         if [ ! -f "$bedr/.well-known/$WESTR" ]
         then
             sudo -u "$WWWUSER" touch "$bedr/.well-known/$WESTR"
@@ -366,7 +348,6 @@ then
         echo "Can't see jq - exiting"
         exit 11
     fi
-    JQVER=$(jq --version)
 fi
 
 if [[ $ROLES == *"$FESTR"* ]]
@@ -399,26 +380,17 @@ then
 
         echo "Prime key lifetime: $REGENINTERVAL seconds"
         echo "New key generated when latest is $dur old"
-        echo "Old keys retired when older than $durt3"
         if [[ "$JUSTONE" == "yes" ]]
         then
-            echo "Only latest key (age <$dur) made available"
+            echo "Only latest key (age <$dur) will be made available"
         else
-            echo "Keys published while younger than $durt2"
+            echo "Keys will be published while younger than $durt2"
         fi
-        echo "Keys deleted when older than $durt5"
+        echo "Old keys moved aside (not loaded) when older than $durt3"
+        echo "Keys wll be deleted when older than $durt5"
 
-        if [ ! -d "$ECHDIR/$fehost.$feport" ]
-        then
-            mkdir -p "$ECHDIR/$fehost.$feport"
-        fi
-        if [ ! -d "$ECHDIR/$fehost.$feport" ]
-        then
-            echo "Can't see $ECHDIR/$fehost.$feport - exiting"
-            exit 25
-        fi
+        makecheckdir "$USER" "$USER" "$ECHDIR/$fehost.$feport"
         files2check="$ECHDIR/$fehost.$feport/*.pem.ech"
-
         for file in $files2check
         do
             if [ ! -f "$file" ]
@@ -426,7 +398,7 @@ then
                 continue
             fi
             fage=$(fileage "$file")
-            #echo "$file is $fage old"
+            echo "$file is $fage old"
             if ((fage < newest))
             then
                 newest=$fage
@@ -442,10 +414,9 @@ then
                 echo "$file is old, (age==$fage >= $durt3)... moving to $ECHOLD"
                 mv "$file" "$ECHOLD"
                 actiontaken="true"
-                someactiontaken="true"
+                restartactiontaken="true"
             fi
         done
-
         echo "Oldest PEM file is $oldf (age: $oldest)"
         echo "Newest PEM file is $newf (age: $newest)"
 
@@ -453,25 +424,21 @@ then
         oldies="$ECHOLD/*"
         for file in $oldies
         do
-            if [ ! -f "$file" ]
+            if [ -f "$file" ]
             then
-                continue
-            fi
-            fage=$(fileage "$file")
-            if ((fage >= durt5))
-            then
-                rm -f "$file"
+                fage=$(fileage "$file")
+                if ((fage >= durt5))
+                then
+                    rm -f "$file"
+                fi
             fi
         done
 
         keyn="ech$(date +%s)"
-
         if ((newest >= (dur-1)))
         then
             echo "Time for a new key pair (newest as old or older than $dur)"
-            "$OSSL/apps/openssl" ech \
-                -ech_version 0xfe0d \
-                -public_name "$fehost" \
+            "$OSSL/apps/openssl" ech -public_name "$fehost" \
                 -out "$ECHDIR/$fehost.$feport/$keyn.pem.ech"
             res=$?
             if [[ "$res" != "0" ]]
@@ -480,7 +447,7 @@ then
                 exit 15
             fi
             actiontaken="true"
-            someactiontaken="true"
+            restartactiontaken="true"
             newf="$ECHDIR/$fehost.$feport/$keyn.pem.ech"
         fi
 
@@ -515,7 +482,7 @@ then
         if [ ! -f "$TMPF" ]
         then
             actiontaken="true"
-            someactiontaken="true"
+            restartactiontaken="true"
         fi
         if [[ "$actiontaken" != "false" ]]
         then
@@ -529,13 +496,13 @@ then
             cfgips=${fe_ipv4s[${feor}]}
             if [[ "$cfgips" != "" ]]
             then
-                ipv4str="\"ipv4hint\" : \"$cfgips\""
+                ipv4str="\"ipv4hint\" : $(csv2jarr "$cfgips")"
             fi
             ipv6str=""
             cfgips=${fe_ipv6s[${feor}]}
             if [[ "$cfgips" != "" ]]
             then
-                ipv6str="\"ipv6hint\" : \"$cfgips\""
+                ipv6str="\"ipv6hint\" : $(csv2jarr "$cfgips")"
             fi
             # for a FE we don't bother with alpn
             alpnstr=""
@@ -559,15 +526,7 @@ then
         wkechfile=$bedr/.well-known/$WESTR
         behost=$(hostport2host "$beor")
         beport=$(hostport2port "$beor")
-        if [ ! -d "$ECHDIR/$behost.$beport" ]
-        then
-            mkdir -p "$ECHDIR/$behost.$beport"
-        fi
-        if [ ! -d "$ECHDIR/$behost.$beport" ]
-        then
-            echo "Can't see $ECHDIR/$behost.$beport - exiting"
-            exit 25
-        fi
+        makecheckdir "$USER" "$USER" "$ECHDIR/$behost.$beport"
         lmf="$ECHDIR/$behost.$beport/latest-merged"
         rm -f "$lmf"
         # is there an alias entry for this BE?
@@ -624,19 +583,12 @@ then
 	                fi
 	            fi
 	        done
-	        # add alpn= to endpoints.params, if desired
+	        # add alpn info to endpoints.params, as desired
 	        alpnval=${be_alpn_arr[${beor}]}
 	        if [[ "$alpnval" != "" ]]
 	        then
 	            TMPF1=$(mktemp)
-                if [[ "$JQVER" == "jq-1.6" ]]
-                then
-                    # 1.6 version
-                    jq --argjson p "$alpnval" '.endpoints[].params.alpn += $p' "$lmf" >"$TMPF1"
-                else
-                    # 1.7 version
-                    jq --argjson p '"'"$alpnval"'"' '.endpoints[].params.alpn += $p' "$lmf" >"$TMPF1"
-                fi
+                jq --argjson p "$(csv2jarr "$alpnval")" '.endpoints[].params.alpn += $p' "$lmf" >"$TMPF1"
                 jres=$?
 	            if [[ "$jres" == 0 ]]
 	            then
@@ -670,13 +622,13 @@ then
             sudo cp "$lmf" "$wkechfile"
             sudo chown "$WWWUSER:$WWWGRP" "$wkechfile"
             sudo chmod a+r "$wkechfile"
-            someactiontaken="true"
+            restartactiontaken="true"
         fi
 
     done
 fi
 
-if [[ "$someactiontaken" != "false" ]]
+if [[ "$restartactiontaken" != "false" ]]
 then
     # restart services that support key rotation
     if [[ $ROLES == *"$FESTR"* ]]
