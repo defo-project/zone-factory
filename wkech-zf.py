@@ -61,6 +61,8 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
     dryrun = args.dryrun
 
     # Reload each time in case it might change as we do a long list of updates
+    # TODO: is there a way to lock the file while processing? 
+    # TODO: what if we hit timeouts? processing might take a long time if list is long
     keyring = load_keyring(args.keyfile)
 
     logging.debug(f"Processing update for ({hostname}, {port}, {target})")
@@ -79,6 +81,7 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
             logging.debug(f"  DETAIL:       TTL: '{item.ttl}'")
             logging.debug(f"  DETAIL:     CLASS: '{item.rdclass.to_text(item.rdclass)}'")
             logging.debug(f"  DETAIL:      TYPE: '{item.rdtype.to_text(item.rdtype)}'")
+            # TODO: What if HMAC_SHA256 is wrong?
             lupdate = dns.update.Update(dns.resolver.zone_for_name(item.name),
                                         keyring=keyring, keyalgorithm=dns.tsig.HMAC_SHA256)
             lupdate.replace(item.name, item.to_rdataset())

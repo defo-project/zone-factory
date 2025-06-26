@@ -281,117 +281,6 @@ def rectify(j, regeninterval=3600):                 # in use
                 del ep[k]
     return j
 
-def check_wkech(hostname, regeninterval=3600, target=None, port=None) -> dict: # in use
-    """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
-    logging.debug(f"Entered check_wkech with args:")
-    logging.debug(f"          hostname: '{hostname}'")
-    logging.debug(f"              port: '{port}'")
-    logging.debug(f"            target: '{target}'")
-    logging.debug(f"    regenintervsal: '{regeninterval}'")
-    result = {
-        'OK': False,            # until we know better
-        'Update': []            # List of RRsets to update
-    }                           # return value
-    alias = None
-    ech_configs = []
-    scheme = "https"
-    if scheme not in ("http", "https"):
-        logging.warning(f"Scheme '{scheme}' not supported")
-        return result
-
-    # hostname = urllib.parse.urlparse(url).hostname
-    # port = urllib.parse.urlparse(url).port
-    if not port or port in (443, 80):
-        port = 443
-    wkurl = f"{scheme}://{hostname}:{port}/.well-known/svcb-origin"
-    svcbname = hostname if port == 443 else f"_{port}._HTTPS.{hostname}"
-    chain = get_https_rrchain(svcbname)
-    depth = len(chain)
-    #
-    # Notes:
-    #  - First RRset in chain is to be compared to WKECH data
-    #  - Last RRset in chain is only one relevant for ECHConfig validation
-    #  - After successful validation, first RRset is to be updated
-    #    unless it matches WKECH data
-    #
-    if depth == 0:              # No HTTPS record found
-        logging.warning(f"No HTTPS record found for '{svcbname}'")
-    else:                       # Chain of AliasMode HTTPS RRsets
-        if depth > 1:
-            logging.debug(f"HTTPS RRset chain (depth {depth}) found for '{svcbname}'")
-        focus = chain[-1].rrset
-        logging.debug(f"Focus on RRset '{focus}'")
-        rrs = list(filter(lambda a: a.rdtype == 65, focus))
-        rrs.sort(key=lambda a: a.priority)
-        select_rr = rrs[0]
-        if select_rr.priority == 0:
-            logging.warning(f"HTTPS RRset chain for '{svcbname}' has unresolved AliasMode RRset")
-        else:
-            logging.debug(f"HTTPS RRset chain for '{svcbname}' ends with a ServiceMode RRset")
-            echparam = select_rr.params.get(5)
-            if echparam:
-                ech_configs.append(echparam.ech)
-            alias = str(select_rr.target)
-            if alias == '.':
-                alias = None if depth == 1 else str(focus.name)
-        
-    logging.debug(f"Using alias '{alias}', "
-                  f"echconfigs {list(map(lambda x: base64.b64encode(x).decode('utf-8'), ech_configs))}")
-
-    response = parse_http_response(get_http(hostname, port, "/.well-known/origin-svcb", ech_configs, alias))
-    if response['status_code'] == 200: # or could test 'reason' for 'OK'
-        rectified = rectify(json.loads(response['body']), regeninterval=regeninterval)
-    else:
-        rectified = None
-        logging.warning(f"Unable to retrieve data from {wkurl}")
-
-    if not rectified:
-        logging.warning(f"Data retrieved from {wkurl} is invalid")
-    else:
-        logging.debug(f"Data retrieved from {wkurl}: {rectified}")
-        rrset = wkech_to_HTTPS_rrset(svcbname, rectified, target=hostname, regeninterval=regeninterval)
-        logging.debug(f"Generated RRset: {rrset[0]}")
-        logging.debug(f"Published RRset: {chain[0].rrset}")
-        if rrset[0] != chain[0].rrset or rrset[0].ttl != chain[0].rrset.ttl:
-            # TODO: consider whether to check TTL
-            logging.debug(f"Generated RRset differs from published one")
-
-            bad_endpoints = 0   # none seen yet
-            for endpoint in rectified['endpoints']:
-                endpoint['_OK_'] = False # until we know better
-                if 'params' not in endpoint or 'ech' not in endpoint['params']:
-                    # nothing to validate
-                    endpoint['_OK_'] = True
-                    continue
-
-                conflist = ECHConfigList(endpoint['params']['ech'])
-                configs = conflist.analyze() # break out individual configs from ECHConfigList
-                cfcount = len(configs)
-                cftally = 0
-                bad_configs = 0
-                for echconfig in configs:
-                    # Visit target using just this config
-                    cftally += 1
-                    echstatus = probe_ech(hostname, port, None, ech_configs=[echconfig], target=target)
-                    logging.debug(f"Result from probing with ECHConfig {cftally}/{cfcount}: {echstatus}")
-                    if echstatus != ssl.ECH_STATUS_SUCCESS:
-                        bad_configs += 1
-                    # Next echconfig
-                if bad_configs:
-                    bad_endpoints += 1
-                else:
-                    endpoint['_OK_'] = True
-                # Next endpoint
-            if bad_endpoints == 0:
-                result['OK'] = True
-                result['Update'] = rrset[:1]
-            
-        else:
-            logging.debug(f"WIP: Generated RRset matches published one")
-            result['OK'] = True
-
-    return result
-
 def check_wkech_by_url(url, regeninterval=3600, target=None) -> dict: # in use
     """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
     result = {
@@ -478,6 +367,110 @@ def prepare_update_by_url(url, target=None): # in use
                               f" {dns.rdatatype.to_text(item.rdtype)} {rr.to_text()}")
             result.append("send")
             result.append("")
+    return result
+
+def check_wkech(hostname, regeninterval=3600, target=None, port=None) -> dict: # in use
+    """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
+    logging.debug(f"Entered check_wkech with args:")
+    logging.debug(f"          hostname: '{hostname}'")
+    logging.debug(f"              port: '{port}'")
+    logging.debug(f"            target: '{target}'")
+    logging.debug(f"    regenintervsal: '{regeninterval}'")
+    result = {
+        'OK': False,            # until we know better
+        'Update': []            # List of RRsets to update
+    }                           # return value
+    alias = None
+    ech_configs = []
+    if not port or port in (443, 80):
+        port = 443
+    wkurl = f"https://{hostname}:{port}/.well-known/svcb-origin"
+    svcbname = hostname if port == 443 else f"_{port}._HTTPS.{hostname}"
+    # TODO: check the flow inside this - it recurses!
+    chain = get_https_rrchain(svcbname)
+    depth = len(chain)
+    #
+    # Notes:
+    #  - First RRset in chain is to be compared to WKECH data
+    #  - Last RRset in chain is only one relevant for ECHConfig validation
+    #  - After successful validation, first RRset is to be updated
+    #    unless it matches WKECH data
+    #
+    if depth == 0:              # No HTTPS record found
+        logging.warning(f"No HTTPS record found for '{svcbname}'")
+    else:                       # Chain of AliasMode HTTPS RRsets
+        if depth > 1:
+            logging.debug(f"HTTPS RRset chain (depth {depth}) found for '{svcbname}'")
+        focus = chain[-1].rrset
+        logging.debug(f"Focus on RRset '{focus}'")
+        rrs = list(filter(lambda a: a.rdtype == 65, focus))
+        rrs.sort(key=lambda a: a.priority)
+        select_rr = rrs[0]
+        if select_rr.priority == 0:
+            logging.warning(f"HTTPS RRset chain for '{svcbname}' has unresolved AliasMode RRset")
+        else:
+            logging.debug(f"HTTPS RRset chain for '{svcbname}' ends with a ServiceMode RRset")
+            echparam = select_rr.params.get(5)
+            if echparam:
+                ech_configs.append(echparam.ech)
+            alias = str(select_rr.target)
+            if alias == '.':
+                alias = None if depth == 1 else str(focus.name)
+        
+    logging.debug(f"Using alias '{alias}', "
+                  f"echconfigs {list(map(lambda x: base64.b64encode(x).decode('utf-8'), ech_configs))}")
+    # TODO: why doesn't this take wkurl as input?
+    response = parse_http_response(get_http(hostname, port, "/.well-known/origin-svcb", ech_configs, alias))
+    if response['status_code'] == 200: # or could test 'reason' for 'OK'
+        # TODO: Do we still need rectify with -07 on web server?
+        rectified = rectify(json.loads(response['body']), regeninterval=regeninterval)
+    else:
+        rectified = None
+        logging.warning(f"Unable to retrieve data from {wkurl}")
+    if not rectified:
+        logging.warning(f"Data retrieved from {wkurl} is invalid")
+    else:
+        logging.debug(f"Data retrieved from {wkurl}: {rectified}")
+        # TODO: check flow
+        rrset = wkech_to_HTTPS_rrset(svcbname, rectified, target=hostname, regeninterval=regeninterval)
+        logging.debug(f"Generated RRset: {rrset[0]}")
+        logging.debug(f"Published RRset: {chain[0].rrset}")
+        if rrset[0] != chain[0].rrset or rrset[0].ttl != chain[0].rrset.ttl:
+            # TODO: consider whether to check TTL
+            logging.debug(f"Generated RRset differs from published one")
+            bad_endpoints = 0   # none seen yet
+            for endpoint in rectified['endpoints']:
+                endpoint['_OK_'] = False # until we know better
+                if 'params' not in endpoint or 'ech' not in endpoint['params']:
+                    # nothing to validate
+                    endpoint['_OK_'] = True
+                    continue
+                conflist = ECHConfigList(endpoint['params']['ech'])
+                configs = conflist.analyze() # break out individual configs from ECHConfigList
+                cfcount = len(configs)
+                cftally = 0
+                bad_configs = 0
+                for echconfig in configs:
+                    # Visit target using just this config
+                    cftally += 1
+                    # TODO: check flow
+                    echstatus = probe_ech(hostname, port, None, ech_configs=[echconfig], target=target)
+                    logging.debug(f"Result from probing with ECHConfig {cftally}/{cfcount}: {echstatus}")
+                    if echstatus != ssl.ECH_STATUS_SUCCESS:
+                        bad_configs += 1
+                    # Next echconfig
+                if bad_configs:
+                    bad_endpoints += 1
+                else:
+                    endpoint['_OK_'] = True
+                # Next endpoint
+            if bad_endpoints == 0:
+                result['OK'] = True
+                # TODO: why :1? should this be :-1?
+                result['Update'] = rrset[:1]
+        else:
+            logging.debug(f"Generated RRset matches published one")
+            result['OK'] = True
     return result
 
 if __name__ == "__main__":
