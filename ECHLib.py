@@ -21,7 +21,6 @@ import dns.zonefile
 import dns.tsigkeyring
 import dns.update
 import dns.exception
-import bind9_parser
 
 class ChosenResolver:
     from dns.resolver import get_default_resolver, make_resolver_at

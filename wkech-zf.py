@@ -1,5 +1,23 @@
 import os, sys
+import bind9_parser
 
+'''
+This is the main ZF implementation script as defined in 
+https://datatracker.ietf.org/doc/html/draft-ietf-tls-wkech
+
+The general plan is to read a list of domain names from a
+CSV file (plus port if != 443 and refresh interval), to
+then poll DNS and the relevant web server to see if there
+is any mismatch. If there is, then we'll validate the 
+content at the WKECH URL and all being well, update the
+relevant HTTPS RR, in this implementation using bind9
+specific tools.
+
+This currently implements the -07 version of the spec.
+
+'''
+
+# Load in a set of library functions
 if 'ECH_PY_LIB' in os.environ:
     epl=os.getenv('ECH_PY_LIB')
     sys.path.append(epl)
