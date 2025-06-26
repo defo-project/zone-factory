@@ -109,7 +109,7 @@ command shell.
 
 6.  Install required Python packages
 	```
-	pip install certifi dnspython httptools
+	pip install certifi dnspython httptools bind9_parser
 	```
 
 7.  Try out the only zone-factory script currently available
