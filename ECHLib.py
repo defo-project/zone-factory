@@ -36,7 +36,7 @@ class ECHConfigList:
     def __len__(self):
         return len(self.body)
 
-    def analyze(self):
+    def explode(self):
         singletons = tuple()
         if len(self):
             base = 2
@@ -52,13 +52,6 @@ class ECHConfigList:
                     singletons += tuple([seglen + segment])
                     base += span
         return singletons
-
-    def merge(self, singletons):
-        load = b''
-        for this in singletons:
-            load += this[2:]
-        span = len(load)
-        return ECHConfigList(span.to_bytes(2) + load)
 
     def __init__(self, source=None):
         self.body = bytes()
@@ -107,81 +100,25 @@ def parse_http_response(response_bytes): # in use
         "body": bytes(parser.body),
     }
 
-def svcbname(parsed: ParseResult): # in use
-    """Derive DNS name of SVCB/HTTPS record corresponding to target URL"""
-    if parsed.scheme == "https":
-        if (parsed.port or 443) == 443:
-            return parsed.hostname
-        else:
-            return f"_{parsed.port}._https.{parsed.hostname}"
-    elif parsed.scheme == "http":
-        if (parsed.port or 80) in (443, 80):
-            return parsed.hostname
-        else:
-            return f"_{parsed.port}._https.{parsed.hostname}"
-    else:
-        # For now, no other scheme is supported
-        return None
-
 def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, depth = 8 # in use
                     ) -> List[Optional[dns.resolver.Answer]]:
     result: list[Optional[dns.resolver.Answer]] = []
     try:
-        # ans = dns.resolver.resolve(domain, "HTTPS")
         ans = ChosenResolver.active.resolve(domain, "HTTPS")
     except dns.resolver.NoAnswer:
         logging.warning(f"No HTTPS record found for {domain}")
+        return result
     except Exception as e:
         logging.critical(f"DNS query failed: {e}")
-        return result + [None]
+        return result
     result = [ans]
+    # TODO: might this accept an HTTPS RR from the additional section?
     rrs = list(filter(lambda a: a.rdtype == 65, ans))
     if len(rrs):
         rrs.sort(key=lambda a: a.priority)
-        if rrs[0].priority == 0:
+        if follow_alias and rrs[0].priority == 0:
             result +=  get_https_rrchain(rrs[0].target, follow_alias=(depth>0), depth=depth-1)
     return result
-
-def get_ech_configs(domain, follow_alias: bool = True, depth = 0) -> Tuple[Optional[str], List[bytes]]: # in use
-    """Look up HTTPS record, following aliases as needed"""
-    maxdepth = 8                # Arbitrary constant
-    try:
-        # ans = dns.resolver.resolve(domain, "HTTPS")
-        ans = ChosenResolver.active.resolve(domain, "HTTPS")
-    except dns.resolver.NoAnswer:
-        logging.warning(f"No HTTPS record found for {domain}")
-        return None, []
-    except Exception as e:
-        logging.critical(f"DNS query failed: {e}")
-        sys.exit(1)
-
-    rrs = list(filter(lambda a: a.rdtype == 65, ans))
-
-    if len(rrs) == 0:
-        logging.warning(f"No echconfig found in HTTPS record for {domain}")
-        return None, []
-
-    rrs.sort(key=lambda a: a.priority)
-    if rrs[0].priority == 0:
-        if depth > maxdepth:
-            logging.critical(f"Alias recursion depth {depth} exceeds limit {maxdepth}")
-            sys.exit(1)
-        logging.debug(f"HTTPS record using AliasMode (0). Looking instead at {rrs[0].target}")
-        return get_ech_configs(rrs[0].target.to_text(True), False, depth=depth+1)
-
-    configs = []
-
-    for rdata in rrs:
-        if hasattr(rdata, "params"):
-            params = rdata.params
-            echconfig = params.get(5)
-            if echconfig:
-                configs.append(echconfig.ech)
-
-    if follow_alias:
-        return None, []
-
-    return domain, configs
 
 def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, target=None) -> ECHresult: # in use
     logging.debug(f"Accessing service providing 'https://{hostname}:{port}/' with target '{target}'")
@@ -206,11 +143,16 @@ def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, 
                     logging.debug("Inner SNI: %s, Outer SNI: %s", ssock.server_hostname, ssock.outer_server_hostname)
                 except ssl.SSLError as e:
                     if enable_retry:
-                        retry_config = ssock._sslobj.get_ech_retry_config()
-                        if retry_config:
-                            logging.debug("Received a retry config: %s", base64.b64encode(retry_config))
-                            return access_origin(hostname, port, path, [retry_config], False, target)
+                        try:
+                            retry_config = ssock._sslobj.get_ech_retry_config()
+                            if retry_config:
+                                logging.debug("Received a retry config: %s", base64.b64encode(retry_config))
+                                return access_origin(hostname, port, path, [retry_config], False, target)
+                        except:
+                            logging.error(f"retry-configs error for {hostname}:{port} -- {e}")
+                            return ECHresult({'ech_status': None, 'response': b''})
                     logging.error(f"SSL error for {hostname}:{port} -- {e}")
+                    return ECHresult({'ech_status': None, 'response': b''})
 
                 response = b''
                 if path != None:
@@ -228,76 +170,10 @@ def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, 
         return ECHresult({'ech_status': None, 'response': b''})
 
 def get_http(hostname, port, path, ech_configs, target=None) -> bytes: # in use
-    logging.debug(f"Getting HTTP data from 'https://{hostname}:{port}{path}' with target '{target}'")
     return access_origin(hostname, port, path=path, ech_configs=ech_configs, target=target)["response"]
 
 def probe_ech(hostname, port, path, ech_configs, target=None): # in use
     return access_origin(hostname, port, path=path, ech_configs=ech_configs, enable_retry=False, target=target)["ech_status"]
-
-def get(url: str, force_grease: bool=False, target: Optional[str]=None): # in use
-    logging.debug(f"Getting data for URL '{url}' with target '{target}'")
-    parsed = urllib.parse.urlparse(url)
-    domain = parsed.hostname
-    if force_grease:
-        alias, ech_configs = None, []
-    else:
-        # chain = get_https_rrchain(svcbname(parsed))
-        # logging.debug(f"HTTPS RRset(s): {list(map(lambda x: x.rrset, chain))}")
-        alias, ech_configs = get_ech_configs(svcbname(parsed))
-    target = target or alias
-    logging.debug(f"  target now set to '{target}'")
-    logging.debug("Discovered ECHConfig values: %s", [base64.b64encode(config) for config in ech_configs])
-    request_path = (parsed.path or '/') + ('?' + parsed.query if parsed.query else '')
-    raw = get_http(domain, parsed.port or 443, request_path, ech_configs, target)
-    return parse_http_response(raw)
-
-def rectify(j, regeninterval=3600):                 # in use
-    """ Convert content at WK URI from earlier format to current """
-    logging.debug("Entered rectify with args:")
-    logging.debug(f"                j: {j}")
-    logging.debug(f"    regeninterval: {regeninterval}")
-    if "endpoints" not in j:
-        # Nothing to work with
-        return None
-    if "regeninterval" not in j:
-        j['regeninterval'] = min(list(map(
-            lambda x: int(
-                x['regeninterval'] if "regeninterval" in x else regeninterval),
-            j['endpoints'])))
-    for ep in j['endpoints']:
-        if "regeninterval" in ep:
-            del ep['regeninterval']
-        if "params" not in ep:
-            ep['params'] = {}
-        keylist = list(ep.keys())
-        for k in keylist:
-            if k not in ("priority", "target", "alias", "params"):
-                if k in ("ipv4hint", "ipv6hint", "alpn"):
-                    if isinstance(ep[k], str):
-                        ep['params'][k] = list(map(
-                            lambda x: x.strip(), ep[k].split(',')))
-                else:
-                    ep['params'][k] = ep[k]
-                del ep[k]
-    return j
-
-def check_wkech_by_url(url, regeninterval=3600, target=None) -> dict: # in use
-    """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
-    result = {
-        'OK': False,            # until we know better
-        'Update': []            # List of RRsets to update
-    }                           # return value
-    alias = None
-    ech_configs = []
-    scheme = urllib.parse.urlparse(url).scheme
-    if scheme not in ("http", "https"):
-        logging.warning(f"Scheme '{scheme}' not supported")
-        return result
-
-    hostname = urllib.parse.urlparse(url).hostname
-    port = urllib.parse.urlparse(url).port
-
-    return check_wkech(hostname, regeninterval=regeninterval, target=target, port=port)
 
 def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str,
                          wkechdata: dict, target = None,
@@ -351,24 +227,6 @@ def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str,
         return rrset                                  # Empty list
     return dns.zonefile.read_rrsets('\n'.join(rrset)) # List (singleton) of dns.rrset objects
 
-def prepare_update_by_url(url, target=None): # in use
-    result = []
-    checked = check_wkech_by_url(url, target=target)
-    if not checked['OK']:
-        logging.warning(f"Validation failed for '{url}'")
-    elif not checked['Update']:
-        logging.info(f"No update needed for '{url}'")
-    else:
-        for item in checked['Update']:
-            result.append(f"update delete {item.name} 0 IN {dns.rdatatype.to_text(item.rdtype)}")
-            for rr in item:
-                result.append(f"update add {item.name} {item.ttl}"
-                              f" {dns.rdataclass.to_text(item.rdclass)}"
-                              f" {dns.rdatatype.to_text(item.rdtype)} {rr.to_text()}")
-            result.append("send")
-            result.append("")
-    return result
-
 def check_wkech(hostname, regeninterval=3600, target=None, port=None) -> dict: # in use
     """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
     logging.debug(f"Entered check_wkech with args:")
@@ -386,7 +244,6 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None) -> dict: #
         port = 443
     wkurl = f"https://{hostname}:{port}/.well-known/svcb-origin"
     svcbname = hostname if port == 443 else f"_{port}._HTTPS.{hostname}"
-    # TODO: check the flow inside this - it recurses!
     chain = get_https_rrchain(svcbname)
     depth = len(chain)
     #
@@ -419,34 +276,32 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None) -> dict: #
         
     logging.debug(f"Using alias '{alias}', "
                   f"echconfigs {list(map(lambda x: base64.b64encode(x).decode('utf-8'), ech_configs))}")
-    # TODO: why doesn't this take wkurl as input?
     response = parse_http_response(get_http(hostname, port, "/.well-known/origin-svcb", ech_configs, alias))
     if response['status_code'] == 200: # or could test 'reason' for 'OK'
-        # TODO: Do we still need rectify with -07 on web server?
-        rectified = rectify(json.loads(response['body']), regeninterval=regeninterval)
+        wkresponse = json.loads(response['body'])
     else:
-        rectified = None
+        wkresponse = None
         logging.warning(f"Unable to retrieve data from {wkurl}")
-    if not rectified:
+    if not wkresponse:
         logging.warning(f"Data retrieved from {wkurl} is invalid")
     else:
-        logging.debug(f"Data retrieved from {wkurl}: {rectified}")
+        logging.debug(f"Data retrieved from {wkurl}: {wkresponse}")
         # TODO: check flow
-        rrset = wkech_to_HTTPS_rrset(svcbname, rectified, target=hostname, regeninterval=regeninterval)
+        rrset = wkech_to_HTTPS_rrset(svcbname, wkresponse, target=hostname, regeninterval=regeninterval)
         logging.debug(f"Generated RRset: {rrset[0]}")
         logging.debug(f"Published RRset: {chain[0].rrset}")
         if rrset[0] != chain[0].rrset or rrset[0].ttl != chain[0].rrset.ttl:
             # TODO: consider whether to check TTL
             logging.debug(f"Generated RRset differs from published one")
             bad_endpoints = 0   # none seen yet
-            for endpoint in rectified['endpoints']:
+            for endpoint in wkresponse['endpoints']:
                 endpoint['_OK_'] = False # until we know better
                 if 'params' not in endpoint or 'ech' not in endpoint['params']:
                     # nothing to validate
                     endpoint['_OK_'] = True
                     continue
                 conflist = ECHConfigList(endpoint['params']['ech'])
-                configs = conflist.analyze() # break out individual configs from ECHConfigList
+                configs = conflist.explode() # break out individual configs from ECHConfigList
                 cfcount = len(configs)
                 cftally = 0
                 bad_configs = 0
