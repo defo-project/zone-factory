@@ -65,7 +65,7 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
     # TODO: what if we hit timeouts? processing might take a long time if list is long
     keyring = load_keyring(args.keyfile)
 
-    logging.debug(f"Processing update for ({hostname}, {port}, {target})")
+    logging.info(f"Processing update for ({hostname}, {port}, {target})")
     checked = check_wkech(hostname, port=port, target=target, regeninterval=regeninterval)
     if not checked['OK']:
         logging.warning(f"Validation failed for ({hostname}, {port}, {target})")
@@ -85,15 +85,19 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
             lupdate = dns.update.Update(dns.resolver.zone_for_name(item.name),
                                         keyring=keyring, keyalgorithm=dns.tsig.HMAC_SHA256)
             lupdate.replace(item.name, item.to_rdataset())
-            logging.info(f"Ready to apply update: {lupdate}")
+            logging.debug(f"Ready to apply update: {lupdate}")
             if dryrun:
                 logging.info("Dry run in progress: skipping update")
                 continue
             if dns.name.from_text('__') in keyring:
                 logging.debug(f"Attempting update {repr(lupdate)} with invalid key")
             try:
-                lresponse = dns.query.tcp(lupdate, ChosenResolver.active.nameservers[0].address, timeout=10)
-                logging.info(f"Update response: {lresponse}")
+                # local policy requires updates to be to/from localhost only, not to a public IP
+                # lresponse = dns.query.tcp(lupdate, ChosenResolver.active.nameservers[0], timeout=10)
+                # TODO: figure resolver thing better
+                lresponse = dns.query.tcp(lupdate, '::1', timeout=10)
+                logging.debug(f"Update response: {lresponse}")
+                logging.info(f"Success updating ({hostname}, {port}, {target})")
             except dns.exception.DNSException as e:
                 logging.error(f"DNS Exception: {e}")
                 
@@ -162,9 +166,6 @@ def main() -> None:
         print("no domains to process - exiting")
         sys.exit(1)
     
-    # be careful while developing
-    args.dryrun = True
-
     logging.debug(f"Command line arguments: {args}")
 
     run_batch(args);

@@ -290,8 +290,9 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None) -> dict: #
         rrset = wkech_to_HTTPS_rrset(svcbname, wkresponse, target=hostname, regeninterval=regeninterval)
         logging.debug(f"Generated RRset: {rrset[0]}")
         logging.debug(f"Published RRset: {chain[0].rrset}")
-        if rrset[0] != chain[0].rrset or rrset[0].ttl != chain[0].rrset.ttl:
-            # TODO: consider whether to check TTL
+        # don't change only based on TTL, we used to, when we had:
+        # if rrset[0] != chain[0].rrset or rrset[0].ttl != chain[0].rrset.ttl:
+        if rrset[0] != chain[0].rrset:
             logging.debug(f"Generated RRset differs from published one")
             bad_endpoints = 0   # none seen yet
             for endpoint in wkresponse['endpoints']:
