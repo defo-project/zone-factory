@@ -25,9 +25,10 @@ import dns.exception
 class ChosenResolver:
     from dns.resolver import get_default_resolver, make_resolver_at
     active = get_default_resolver()
-
     def activate(server):
-       ChosenResolver.active = ChosenResolver.make_resolver_at(server)
+        ChosenResolver.active = ChosenResolver.make_resolver_at(server)
+    def set_timeout(tout):
+        ChosenResolver.timeout = tout
 
 class ECHConfigList:
     import base64
@@ -120,7 +121,7 @@ def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, dept
             result +=  get_https_rrchain(rrs[0].target, follow_alias=(depth>0), depth=depth-1)
     return result
 
-def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, target=None) -> ECHresult: # in use
+def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, target=None, tout=1.0) -> ECHresult: # in use
     logging.debug(f"Accessing service providing 'https://{hostname}:{port}/' with target '{target}'")
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.load_verify_locations(certifi.where())
@@ -134,6 +135,8 @@ def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, 
             pass
     try:
         with socket.create_connection((target or hostname, port)) as sock:
+            sock.settimeout(tout)
+            logging.debug(f"Set socket timeout to {tout}")
             with context.wrap_socket(sock, server_hostname=hostname, do_handshake_on_connect=False) as ssock:
                 try:
                     status = None
@@ -147,7 +150,7 @@ def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, 
                             retry_config = ssock._sslobj.get_ech_retry_config()
                             if retry_config:
                                 logging.debug("Received a retry config: %s", base64.b64encode(retry_config))
-                                return access_origin(hostname, port, path, [retry_config], False, target)
+                                return access_origin(hostname, port, path, [retry_config], False, target, tout)
                         except:
                             logging.error(f"retry-configs error for {hostname}:{port} -- {e}")
                             return ECHresult({'ech_status': None, 'response': b''})
@@ -169,11 +172,11 @@ def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, 
         logging.warning(f"socket error for {target or hostname}:{port} -- {e}")
         return ECHresult({'ech_status': None, 'response': b''})
 
-def get_http(hostname, port, path, ech_configs, target=None) -> bytes: # in use
-    return access_origin(hostname, port, path=path, ech_configs=ech_configs, target=target)["response"]
+def get_http(hostname, port, path, ech_configs, target=None, tout=1.0) -> bytes: # in use
+    return access_origin(hostname, port, path=path, ech_configs=ech_configs, target=target, tout=tout)["response"]
 
-def probe_ech(hostname, port, path, ech_configs, target=None): # in use
-    return access_origin(hostname, port, path=path, ech_configs=ech_configs, enable_retry=False, target=target)["ech_status"]
+def probe_ech(hostname, port, path, ech_configs, target=None, tout=1.0): # in use
+    return access_origin(hostname, port, path=path, ech_configs=ech_configs, enable_retry=False, target=target, tout=tout)["ech_status"]
 
 def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str,
                          wkechdata: dict, target = None,
@@ -227,7 +230,7 @@ def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str,
         return rrset                                  # Empty list
     return dns.zonefile.read_rrsets('\n'.join(rrset)) # List (singleton) of dns.rrset objects
 
-def check_wkech(hostname, regeninterval=3600, target=None, port=None) -> dict: # in use
+def check_wkech(hostname, regeninterval=3600, target=None, port=None, tout=1.0) -> dict: # in use
     """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
     logging.debug(f"Entered check_wkech with args:")
     logging.debug(f"          hostname: '{hostname}'")
@@ -276,7 +279,7 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None) -> dict: #
         
     logging.debug(f"Using alias '{alias}', "
                   f"echconfigs {list(map(lambda x: base64.b64encode(x).decode('utf-8'), ech_configs))}")
-    response = parse_http_response(get_http(hostname, port, "/.well-known/origin-svcb", ech_configs, alias))
+    response = parse_http_response(get_http(hostname, port, "/.well-known/origin-svcb", ech_configs, alias, tout))
     if response['status_code'] == 200: # or could test 'reason' for 'OK'
         wkresponse = json.loads(response['body'])
     else:
@@ -310,7 +313,7 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None) -> dict: #
                     # Visit target using just this config
                     cftally += 1
                     # TODO: check flow
-                    echstatus = probe_ech(hostname, port, None, ech_configs=[echconfig], target=target)
+                    echstatus = probe_ech(hostname, port, None, ech_configs=[echconfig], target=target, tout=tout)
                     logging.debug(f"Result from probing with ECHConfig {cftally}/{cfcount}: {echstatus}")
                     if echstatus != ssl.ECH_STATUS_SUCCESS:
                         bad_configs += 1

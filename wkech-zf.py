@@ -33,7 +33,6 @@ def load_keyring(keyfile):
         added our user to the bind group and chmod'd that file to 640.
 
         We return a bogus entry rather than fail.
-        TODO: revisit that choice maybe.
     '''
     keydict = {}
     if not os.access(keyfile, os.R_OK):
@@ -66,7 +65,7 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
     keyring = load_keyring(args.keyfile)
 
     logging.info(f"Processing update for ({hostname}, {port}, {target})")
-    checked = check_wkech(hostname, port=port, target=target, regeninterval=regeninterval)
+    checked = check_wkech(hostname, port=port, target=target, regeninterval=regeninterval, tout=args.timeout)
     if not checked['OK']:
         logging.warning(f"Validation failed for ({hostname}, {port}, {target})")
     elif not checked['Update']:
@@ -137,15 +136,21 @@ def main() -> None:
         "-v", "--verbose", action="store_true", help="Enable verbose logging"
     )
     parser.add_argument(
-        "-n", "--dryrun", "--dry-run", action="store_true", help="disable update transaction"
+        "-n", "--dryrun", "--dry-run", action="store_true",
+        help="disable update transaction"
     )
     parser.add_argument(
         "-s", "--nameserver", "--name-server", default=None, nargs='?',
         help="DNS name server to use instead of system resolver"
     )
     parser.add_argument(
+        "-t", "--timeout", type=float, default=1.0, nargs='?',
+        help="Timeout for DNS and/or web accesses"
+    )
+    parser.add_argument(
         "-d", "--domains_csv", dest="domains_csv",
-        help="file containing list of origins")
+        help="file containing list of origins"
+    )
     parser.add_argument(
         "-k", "--keyfile", "--key-file", dest="keyfile", nargs='?', default='/run/named/session.key',
         help="configuration file for TSIG key to use (default: /run/named/session.key)"
@@ -154,6 +159,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.nameserver:
         ChosenResolver.activate(args.nameserver)
+    if args.timeout:
+        ChosenResolver.set_timeout(args.timeout)
 
     # Set up logging
     logging.basicConfig(
@@ -161,15 +168,14 @@ def main() -> None:
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
+    # log args to help reconstruct if needed
+    logging.info(f"Command line arguments: {args}")
+
     # check we have a sane set of args
     if args.domains_csv is None:
         print("no domains to process - exiting")
         sys.exit(1)
-    
-    logging.debug(f"Command line arguments: {args}")
-
     run_batch(args);
-
 
 if __name__ == "__main__":
     main()
