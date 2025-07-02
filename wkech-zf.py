@@ -61,7 +61,9 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
 
     # Reload each time in case it might change as we do a long list of updates
     # TODO: is there a way to lock the file while processing? 
+    #       maybe try reload key/file if TSIG fails/file is newer
     # TODO: what if we hit timeouts? processing might take a long time if list is long
+    #       put in some timeout-per-CSV-line processing, with an exception report
     keyring = load_keyring(args.keyfile)
 
     logging.info(f"Processing update for ({hostname}, {port}, {target})")
@@ -81,6 +83,7 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
             logging.debug(f"  DETAIL:     CLASS: '{item.rdclass.to_text(item.rdclass)}'")
             logging.debug(f"  DETAIL:      TYPE: '{item.rdtype.to_text(item.rdtype)}'")
             # TODO: What if HMAC_SHA256 is wrong?
+            #       probably read algo from keyfile - but different strings need mapping
             lupdate = dns.update.Update(dns.resolver.zone_for_name(item.name),
                                         keyring=keyring, keyalgorithm=dns.tsig.HMAC_SHA256)
             lupdate.replace(item.name, item.to_rdataset())
@@ -94,6 +97,9 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
                 # local policy requires updates to be to/from localhost only, not to a public IP
                 # lresponse = dns.query.tcp(lupdate, ChosenResolver.active.nameservers[0], timeout=10)
                 # TODO: figure resolver thing better
+                #       ChosenResolver allows not using what's in /etc/resolv.conf
+                #       but here we need to match deployed policy of named
+                #       so there's a bit of a mistmatch
                 lresponse = dns.query.tcp(lupdate, '::1', timeout=10)
                 logging.debug(f"Update response: {lresponse}")
                 logging.info(f"Success updating ({hostname}, {port}, {target})")

@@ -114,6 +114,8 @@ def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, dept
         return result
     result = [ans]
     # TODO: might this accept an HTTPS RR from the additional section?
+    #       need to check if `ans` includes additional section or not
+    #       not clear if good/bad to accept such, tend towards not using
     rrs = list(filter(lambda a: a.rdtype == 65, ans))
     if len(rrs):
         rrs.sort(key=lambda a: a.priority)
@@ -195,6 +197,7 @@ def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str,
             rrset.append(rr)
         else:
             if 'target' in endpoint:         # WKECH specifies target
+                # TODO: check if wkech-zf.py supplies args as expected here
                 target = endpoint['target']  # - obey, ignoring arg -- NOTE: GIGO risk
                 logging.debug(f"WKECH specifies target: '{target}'")
             if not target:                   # target missing from both WKECH and arg
@@ -209,12 +212,19 @@ def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str,
                 if target == svcbname:
                     target = '.'
                 svcparams = []
-                priority = endpoint['priority'] if 'priority' in endpoint else 1 # TODO: improve this
+                # TODO: check this again later
+                #       we set default to 1000, then JSON creator can 
+                #       get desired outcome by setting explicit numbers above
+                #       or below that
+                #       this might be reflected in a spec issue
+                priority = endpoint['priority'] if 'priority' in endpoint else 1000
                 params = endpoint['params']
                 for tag, val in params.items():
+                    # TODO: Add further special handling as needed (ALPN?, MANDATORY, ...)
+                    #       probably a NOOP for now, but if/when other params supported
+                    #       then those might need code here
                     if tag in ('ipv4hint', 'ipv6hint', 'alpn', 'mandatory'):
                         svcparams.append(f"{tag}={','.join(val)}")
-                    # TODO: Add further special handling as needed (ALPN?, MANDATORY, ...)
                     elif tag in ('port', 'ech'):
                         svcparams.append(f"{tag}={val}")
                     elif tag in ('no-default-alpn'): 
@@ -230,6 +240,8 @@ def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str,
         return rrset                                  # Empty list
     return dns.zonefile.read_rrsets('\n'.join(rrset)) # List (singleton) of dns.rrset objects
 
+# TODO: check what happens if JSON is empty (spec says
+#       that means delete, but we probably dislike that)
 def check_wkech(hostname, regeninterval=3600, target=None, port=None, tout=1.0) -> dict: # in use
     """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
     logging.debug(f"Entered check_wkech with args:")
@@ -289,12 +301,12 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None, tout=1.0) 
         logging.warning(f"Data retrieved from {wkurl} is invalid")
     else:
         logging.debug(f"Data retrieved from {wkurl}: {wkresponse}")
-        # TODO: check flow
         rrset = wkech_to_HTTPS_rrset(svcbname, wkresponse, target=hostname, regeninterval=regeninterval)
         logging.debug(f"Generated RRset: {rrset[0]}")
         logging.debug(f"Published RRset: {chain[0].rrset}")
         # don't change only based on TTL, we used to, when we had:
         # if rrset[0] != chain[0].rrset or rrset[0].ttl != chain[0].rrset.ttl:
+        # TODO: check why we were seeing decremented TTLs
         if rrset[0] != chain[0].rrset:
             logging.debug(f"Generated RRset differs from published one")
             bad_endpoints = 0   # none seen yet
@@ -312,7 +324,6 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None, tout=1.0) 
                 for echconfig in configs:
                     # Visit target using just this config
                     cftally += 1
-                    # TODO: check flow
                     echstatus = probe_ech(hostname, port, None, ech_configs=[echconfig], target=target, tout=tout)
                     logging.debug(f"Result from probing with ECHConfig {cftally}/{cfcount}: {echstatus}")
                     if echstatus != ssl.ECH_STATUS_SUCCESS:
@@ -325,7 +336,8 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None, tout=1.0) 
                 # Next endpoint
             if bad_endpoints == 0:
                 result['OK'] = True
-                # TODO: why :1? should this be :-1?
+                # TODO: check this is correct
+                #       rrset[0] is question, so rrset[:1] is "all but question"
                 result['Update'] = rrset[:1]
         else:
             logging.debug(f"Generated RRset matches published one")
