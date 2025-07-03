@@ -188,11 +188,13 @@ def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str,
         return []
     ttl = int(wkechdata['regeninterval'] / 2 if 'regeninterval' in wkechdata else regeninterval / 2)
     dnstype = 'HTTPS'
+    # default priority if none explicitly specified
+    priority = 1
     for endpoint in wkechdata['endpoints']:
         if 'alias' in endpoint:
-            priority = 0
+            alias_priority = 0
             target = endpoint['alias']
-            rr = f"{dns.name.from_text(svcbname)} {ttl} {dnstype} {priority} {target}"
+            rr = f"{dns.name.from_text(svcbname)} {ttl} {dnstype} {alias_priority} {target}"
             # logging.debug(f"RR generated from WKECH: {rr}")
             rrset.append(rr)
         else:
@@ -212,12 +214,10 @@ def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str,
                 if target == svcbname:
                     target = '.'
                 svcparams = []
-                # TODO: check this again later
-                #       we set default to 1000, then JSON creator can 
-                #       get desired outcome by setting explicit numbers above
-                #       or below that
-                #       this might be reflected in a spec issue
-                priority = endpoint['priority'] if 'priority' in endpoint else 1000
+                # if a priority was explicitly set, then use that and
+                # latch it for subsequent records (if any)
+                if 'priority' in endpoint:
+                    priority = endpoint['priority']
                 params = endpoint['params']
                 for tag, val in params.items():
                     # TODO: Add further special handling as needed (ALPN?, MANDATORY, ...)
