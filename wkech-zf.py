@@ -119,21 +119,21 @@ def run_batch(args):
                 continue    # skip empties
             if str(row[0])[0] in ';#': # allow comments
                 continue               # and skip them
-            alias = None
-            port = None
-            regeninterval = 3600
-            row = list(map(str.strip, row))
-            hostname = row[0]
-            if len(row) > 3 and row[3]:
-                regeninterval = int(row[3])
-            if len(row) > 2 and row[2]:
-                alias = str(row[2])
-            if len(row) > 1 and row[1]:
-                port = int(row[1])
             try:
+                alias = None
+                port = None
+                regeninterval = 3600
+                row = list(map(str.strip, row))
+                hostname = row[0]
+                if len(row) > 3 and row[3]:
+                    regeninterval = int(row[3])
+                if len(row) > 2 and row[2]:
+                    alias = str(row[2])
+                if len(row) > 1 and row[1]:
+                    port = int(row[1])
                 result += apply_update(args, hostname, port, target=alias, regeninterval=regeninterval)
             except Exception as e:
-                logging.error(f"Some exception processing {hostname}:{port}, {e}")
+                logging.error(f"Exception processing {row}, {e}")
     return result
 
 def main() -> None:
@@ -164,22 +164,17 @@ def main() -> None:
         "-k", "--keyfile", "--key-file", dest="keyfile", nargs='?', default='/run/named/session.key',
         help="configuration file for TSIG key to use (default: /run/named/session.key)"
     )
-    
     args = parser.parse_args()
     if args.nameserver:
         ChosenResolver.activate(args.nameserver)
     if args.timeout:
         ChosenResolver.set_timeout(args.timeout)
-
     # Set up logging
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
-
-    # log args to help reconstruct if needed
     logging.info(f"Command line arguments: {args}")
-
     # check we have a sane set of args
     if args.domains_csv is None:
         print("no domains to process - exiting")
