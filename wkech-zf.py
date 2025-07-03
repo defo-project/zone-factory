@@ -130,7 +130,10 @@ def run_batch(args):
                 alias = str(row[2])
             if len(row) > 1 and row[1]:
                 port = int(row[1])
-            result += apply_update(args, hostname, port, target=alias, regeninterval=regeninterval)
+            try:
+                result += apply_update(args, hostname, port, target=alias, regeninterval=regeninterval)
+            except Exception as e:
+                logging.error(f"Some exception processing {hostname}:{port}, {e}")
     return result
 
 def main() -> None:

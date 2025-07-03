@@ -310,6 +310,9 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None, tout=1.0) 
         if rrset[0] != chain[0].rrset:
             logging.debug(f"Generated RRset differs from published one")
             bad_endpoints = 0   # none seen yet
+            # TODO: maybe structure the empty endoints list thing better
+            if len(wkresponse['endpoints']) <= 0:
+                bad_endoints = 1000 # just to not trigger success return
             for endpoint in wkresponse['endpoints']:
                 endpoint['_OK_'] = False # until we know better
                 if 'params' not in endpoint or 'ech' not in endpoint['params']:
