@@ -24,7 +24,8 @@ import dns.exception
 
 class ChosenResolver:
     from dns.resolver import get_default_resolver, make_resolver_at
-    active = get_default_resolver()
+    # active = get_default_resolver()
+    active = make_resolver_at("::1")
     def activate(server):
         ChosenResolver.active = ChosenResolver.make_resolver_at(server)
     def set_timeout(tout):
@@ -304,10 +305,11 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None, tout=1.0) 
         rrset = wkech_to_HTTPS_rrset(svcbname, wkresponse, target=hostname, regeninterval=regeninterval)
         logging.debug(f"Generated RRset: {rrset[0]}")
         logging.debug(f"Published RRset: {chain[0].rrset}")
-        # don't change only based on TTL, we used to, when we had:
-        # if rrset[0] != chain[0].rrset or rrset[0].ttl != chain[0].rrset.ttl:
-        # TODO: check why we were seeing decremented TTLs
-        if rrset[0] != chain[0].rrset:
+        # we check rrset and TTL, because we really need to be talking direct
+        # to authoritative and not via OS's stub because in the latter case,
+        # we'd be vulnerable to spoofed answers (unless DNSSEC is deployed and
+        # checked, which is uncommon)
+        if rrset[0] != chain[0].rrset or rrset[0].ttl != chain[0].rrset.ttl:
             logging.debug(f"Generated RRset differs from published one")
             bad_endpoints = 0   # none seen yet
             # TODO: maybe structure the empty endoints list thing better
