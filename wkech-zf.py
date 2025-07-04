@@ -31,8 +31,10 @@ def map_tsig_alg(instring):
         hmac-256 which will break (or work, if correct)
     '''
     try:
+        # possible inputs listed at:
+        # https://bind9.readthedocs.io/en/stable/chapter4.html#rndcconf-statement-algorithm
         # https://www.dnspython.org/docs/1.14.0/dns.tsig-pysrc.html
-        # says that from_text here should do the right thing
+        # says that dns.name.from_text here should do the right thing
         return dns.name.from_text(instring)
     except Exception as e:
         return dns.tsig.HMAC_SHA256
