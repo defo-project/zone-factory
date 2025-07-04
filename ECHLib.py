@@ -24,10 +24,18 @@ import dns.exception
 
 class ChosenResolver:
     from dns.resolver import get_default_resolver, make_resolver_at
-    # active = get_default_resolver()
-    active = make_resolver_at("::1")
+    # We default to use a new stub talking direct to the authoritative
+    # at '::1' as our chosen resolver. This can be over-ridded on the
+    # command line, but if so, TSIG needs to be setup to work for
+    # that configuration
+    # Note that use of ::1 means we do not expect to see TTLs decremented
+    # (we would if we used the default systemd stub).
+    # TODO: test with a name rather than address for server and CLI
+    server_addr = "::1"
+    active = make_resolver_at(server_addr)
     def activate(server):
         ChosenResolver.active = ChosenResolver.make_resolver_at(server)
+        server_addr = server
     def set_timeout(tout):
         ChosenResolver.timeout = tout
 

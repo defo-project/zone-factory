@@ -94,7 +94,7 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
             if dns.name.from_text('__') in keyring:
                 logging.debug(f"Attempting update {repr(lupdate)} with invalid key")
             try:
-                lresponse = dns.query.tcp(lupdate, ChosenResolver.active.nameservers[0], timeout=10)
+                lresponse = dns.query.tcp(lupdate, ChosenResolver.server_addr , timeout=10)
                 logging.debug(f"Update response: {lresponse}")
                 logging.info(f"Success updating ({hostname}, {port}, {target})")
             except dns.exception.DNSException as e:
