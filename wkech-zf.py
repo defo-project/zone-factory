@@ -1,5 +1,6 @@
 import os, sys
 import bind9_parser
+import signal, time
 
 '''
 This is the main ZF implementation script as defined in 
@@ -23,6 +24,14 @@ if 'ECH_PY_LIB' in os.environ:
     sys.path.append(epl)
 from ECHLib import *
 
+# We setup a general timeout per origin, in case some n/w or file access
+# fails slowly
+class TimeOutException(Exception):
+   pass
+
+def alarm_handler(signum, frame):
+    raise TimeOutException()
+
 def map_tsig_alg(instring):
     '''
         Bind's session key file uses different strings for TSIG algs
@@ -35,6 +44,7 @@ def map_tsig_alg(instring):
         # https://bind9.readthedocs.io/en/stable/chapter4.html#rndcconf-statement-algorithm
         # https://www.dnspython.org/docs/1.14.0/dns.tsig-pysrc.html
         # says that dns.name.from_text here should do the right thing
+        print(f"Mapping {instring}")
         return dns.name.from_text(instring)
     except Exception as e:
         return dns.tsig.HMAC_SHA256
@@ -79,13 +89,6 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
     result = []
     dryrun = args.dryrun
 
-    # Reload each time in case it might change as we do a long list of updates
-    # TODO: is there a way to lock the file while processing? 
-    #       maybe try reload key/file if TSIG fails/file is newer
-    # TODO: what if we hit timeouts? processing might take a long time if list is long
-    #       put in some timeout-per-CSV-line processing, with an exception report
-    keyring = load_keyring(args.keyfile)
-
     logging.info(f"Processing update for ({hostname}, {port}, {target})")
     checked = check_wkech(hostname, port=port, target=target, regeninterval=regeninterval, tout=args.timeout)
     if not checked['OK']:
@@ -102,8 +105,8 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
             logging.debug(f"  DETAIL:       TTL: '{item.ttl}'")
             logging.debug(f"  DETAIL:     CLASS: '{item.rdclass.to_text(item.rdclass)}'")
             logging.debug(f"  DETAIL:      TYPE: '{item.rdtype.to_text(item.rdtype)}'")
-            # TODO: What if HMAC_SHA256 is wrong?
-            #       probably read algo from keyfile - but different strings need mapping
+            # Reload each time in case it might change as we do a long list of updates
+            keyring = load_keyring(args.keyfile)
             lupdate = dns.update.Update(dns.resolver.zone_for_name(item.name),
                                         keyring=keyring[0], keyalgorithm=keyring[1])
             lupdate.replace(item.name, item.to_rdataset())
@@ -114,7 +117,7 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
             if dns.name.from_text('__') in keyring[0]:
                 logging.debug(f"Attempting update {repr(lupdate)} with invalid key")
             try:
-                lresponse = dns.query.tcp(lupdate, ChosenResolver.server_addr , timeout=10)
+                lresponse = dns.query.tcp(lupdate, ChosenResolver.server_addr , timeout=args.timeout)
                 logging.debug(f"Update response: {lresponse}")
                 logging.info(f"Success updating ({hostname}, {port}, {target})")
             except dns.exception.DNSException as e:
@@ -126,28 +129,34 @@ def run_batch(args):
     result = []
     todo=args.domains_csv
     with open(todo, newline='') as csvfile:
-        readCSV = csv.reader(csvfile, delimiter=",")
-        for row in readCSV:
-            logging.debug(f"Parsing row from file '{todo}': {row}")
-            if len(row) < 1 or not row[0]:
-                continue    # skip empties
-            if str(row[0])[0] in ';#': # allow comments
-                continue               # and skip them
-            try:
-                alias = None
-                port = None
-                regeninterval = 3600
-                row = list(map(str.strip, row))
-                hostname = row[0]
-                if len(row) > 3 and row[3]:
-                    regeninterval = int(row[3])
-                if len(row) > 2 and row[2]:
-                    alias = str(row[2])
-                if len(row) > 1 and row[1]:
-                    port = int(row[1])
-                result += apply_update(args, hostname, port, target=alias, regeninterval=regeninterval)
-            except Exception as e:
-                logging.error(f"Exception processing {row}, {e}")
+        try:
+            signal.signal(signal.SIGALRM, alarm_handler)
+            signal.alarm(int(args.timeout))
+            readCSV = csv.reader(csvfile, delimiter=",")
+            for row in readCSV:
+                logging.debug(f"Parsing row from file '{todo}': {row}")
+                if len(row) < 1 or not row[0]:
+                    continue    # skip empties
+                if str(row[0])[0] in ';#': # allow comments
+                    continue               # and skip them
+                try:
+                    alias = None
+                    port = None
+                    regeninterval = 3600
+                    row = list(map(str.strip, row))
+                    hostname = row[0]
+                    if len(row) > 3 and row[3]:
+                        regeninterval = int(row[3])
+                    if len(row) > 2 and row[2]:
+                        alias = str(row[2])
+                    if len(row) > 1 and row[1]:
+                        port = int(row[1])
+                    result += apply_update(args, hostname, port, target=alias, regeninterval=regeninterval)
+                except Exception as e:
+                    logging.error(f"Exception processing {row}, {e}")
+            signal.alarm(0)
+        except TimeOutException as t:
+            logging.error(f"Timeout processing {rpw}, {e}")
     return result
 
 def main() -> None:
