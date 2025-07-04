@@ -23,6 +23,22 @@ if 'ECH_PY_LIB' in os.environ:
     sys.path.append(epl)
 from ECHLib import *
 
+def map_tsig_alg(instring):
+    '''
+        Bind's session key file uses different strings for TSIG algs
+        compared to dnspython's so we need to map strings we know and
+        like.  If we don't like the input (or get crap) we return
+        hmac-256 which will break (or work, if correct)
+    '''
+    try:
+        # https://www.dnspython.org/docs/1.14.0/dns.tsig-pysrc.html
+        # says that from_text here should do the right thing
+        return dns.name.from_text(instring)
+    except Exception as e:
+        return dns.tsig.HMAC_SHA256
+    return dns.tsig.HMAC_SHA256
+
+
 def load_keyring(keyfile):
     '''
         Initialize a keyring from a configuration file in named.conf syntax,
@@ -35,6 +51,7 @@ def load_keyring(keyfile):
         We return a bogus entry rather than fail.
     '''
     keydict = {}
+    tsig_alg = dns.tsig.HMAC_SHA256
     if not os.access(keyfile, os.R_OK):
         logging.warning(f"Can't open key file: '{keyfile}'")
     else:
@@ -45,13 +62,14 @@ def load_keyring(keyfile):
             d = clauses.parseString(cfg).asDict()
             for entry in d['key']:
                 keydict[entry['key_id'].strip('"')] = entry['secret'].strip('"')
+                tsig_alg = map_tsig_alg(entry['algorithm'])
         except Exception as e:
             logging.warning(f"{e}")
             keydict = {}
     if not keydict:
         logging.warning(f"Loading dummy entry in keyring")
         keydict = { '__.': 'invalid_invalid_invalid_invalid_' }
-    result = dns.tsigkeyring.from_text(keydict)
+    result = [ dns.tsigkeyring.from_text(keydict), tsig_alg ]
     logging.debug(f"Loaded keyring")
     return result
 
@@ -85,13 +103,13 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
             # TODO: What if HMAC_SHA256 is wrong?
             #       probably read algo from keyfile - but different strings need mapping
             lupdate = dns.update.Update(dns.resolver.zone_for_name(item.name),
-                                        keyring=keyring, keyalgorithm=dns.tsig.HMAC_SHA256)
+                                        keyring=keyring[0], keyalgorithm=keyring[1])
             lupdate.replace(item.name, item.to_rdataset())
             logging.debug(f"Ready to apply update: {lupdate}")
             if dryrun:
                 logging.info("Dry run in progress: skipping update")
                 continue
-            if dns.name.from_text('__') in keyring:
+            if dns.name.from_text('__') in keyring[0]:
                 logging.debug(f"Attempting update {repr(lupdate)} with invalid key")
             try:
                 lresponse = dns.query.tcp(lupdate, ChosenResolver.server_addr , timeout=10)
