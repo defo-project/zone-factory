@@ -122,9 +122,8 @@ def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, dept
         logging.critical(f"DNS query failed: {e}")
         return result
     result = [ans]
-    # TODO: might this accept an HTTPS RR from the additional section?
-    #       need to check if `ans` includes additional section or not
-    #       not clear if good/bad to accept such, tend towards not using
+    # We wondered if this might this accept an HTTPS RR from the additional section.
+    # testing seems to indicate not.
     rrs = list(filter(lambda a: a.rdtype == 65, ans))
     if len(rrs):
         rrs.sort(key=lambda a: a.priority)
@@ -229,9 +228,9 @@ def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str,
                     priority = endpoint['priority']
                 params = endpoint['params']
                 for tag, val in params.items():
-                    # TODO: Add further special handling as needed (ALPN?, MANDATORY, ...)
-                    #       probably a NOOP for now, but if/when other params supported
-                    #       then those might need code here
+                    # Further code is a NOOP for now, but if/when other params supported
+                    # then those might need code here, at least depending on whether they
+                    # are single-valued (like ech) or a list (list alpn)
                     if tag in ('ipv4hint', 'ipv6hint', 'alpn', 'mandatory'):
                         svcparams.append(f"{tag}={','.join(val)}")
                     elif tag in ('port', 'ech'):
