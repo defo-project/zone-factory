@@ -7,14 +7,21 @@ This is the main ZF implementation script as defined in
 https://datatracker.ietf.org/doc/html/draft-ietf-tls-wkech
 
 The general plan is to read a list of domain names from a
-CSV file (plus port if != 443 and refresh interval), to
+CSV file (plus port if != 443 and regeninterval), to
 then poll DNS and the relevant web server to see if there
 is any mismatch. If there is, then we'll validate the 
 content at the WKECH URL and all being well, update the
 relevant HTTPS RR, in this implementation using bind9
 specific tools.
 
-This currently implements the -07 version of the spec.
+This currently implements the -08 version of the spec.
+
+DNS queries in suppor of HTTPS requests (e.g. to acquire
+the wkech JSON) use the system stub resolver. DNS queries
+and updates related to checking HTTPS RR values use a
+hard-coded stub resolver talking to '::1.53'. If that
+doesn't match the local (e.g. bind) setup for update
+policy, then you'll need to modify this code.
 
 '''
 
@@ -117,7 +124,7 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
             if dns.name.from_text('__') in keyring[0]:
                 logging.debug(f"Attempting update {repr(lupdate)} with invalid key")
             try:
-                lresponse = dns.query.tcp(lupdate, ChosenResolver.server_addr , timeout=args.timeout)
+                lresponse = dns.query.tcp(lupdate, '::1', timeout=args.timeout)
                 logging.debug(f"Update response: {lresponse}")
                 logging.info(f"Success updating ({hostname}, {port}, {target})")
             except dns.exception.DNSException as e:
@@ -172,10 +179,6 @@ def main() -> None:
         help="disable update transaction"
     )
     parser.add_argument(
-        "-s", "--nameserver", "--name-server", default=None, nargs='?',
-        help="DNS name server to use instead of system resolver"
-    )
-    parser.add_argument(
         "-t", "--timeout", type=float, default=1.0, nargs='?',
         help="Timeout for DNS and/or web accesses"
     )
@@ -188,10 +191,6 @@ def main() -> None:
         help="configuration file for TSIG key to use (default: /run/named/session.key)"
     )
     args = parser.parse_args()
-    if args.nameserver:
-        ChosenResolver.activate(args.nameserver)
-    if args.timeout:
-        ChosenResolver.set_timeout(args.timeout)
     # Set up logging
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

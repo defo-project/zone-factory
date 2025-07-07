@@ -22,23 +22,6 @@ import dns.tsigkeyring
 import dns.update
 import dns.exception
 
-class ChosenResolver:
-    from dns.resolver import get_default_resolver, make_resolver_at
-    # We default to use a new stub talking direct to the authoritative
-    # at '::1' as our chosen resolver. This can be over-ridded on the
-    # command line, but if so, TSIG needs to be setup to work for
-    # that configuration
-    # Note that use of ::1 means we do not expect to see TTLs decremented
-    # (we would if we used the default systemd stub).
-    # TODO: test with a name rather than address for server and CLI
-    server_addr = "::1"
-    active = make_resolver_at(server_addr)
-    def activate(server):
-        ChosenResolver.active = ChosenResolver.make_resolver_at(server)
-        server_addr = server
-    def set_timeout(tout):
-        ChosenResolver.timeout = tout
-
 class ECHConfigList:
     import base64
     import logging
@@ -114,7 +97,8 @@ def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, dept
                     ) -> List[Optional[dns.resolver.Answer]]:
     result: list[Optional[dns.resolver.Answer]] = []
     try:
-        ans = ChosenResolver.active.resolve(domain, "HTTPS")
+        lres = dns.resolver.make_resolver_at('::1')
+        ans = lres.resolve(domain, "HTTPS")
     except dns.resolver.NoAnswer:
         logging.warning(f"No HTTPS record found for {domain}")
         return result
