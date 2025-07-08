@@ -51,7 +51,7 @@ def map_tsig_alg(instring):
         # https://bind9.readthedocs.io/en/stable/chapter4.html#rndcconf-statement-algorithm
         # https://www.dnspython.org/docs/1.14.0/dns.tsig-pysrc.html
         # says that dns.name.from_text here should do the right thing
-        print(f"Mapping {instring}")
+        logging.debug(f"Mapping {instring}")
         return dns.name.from_text(instring)
     except Exception as e:
         return dns.tsig.HMAC_SHA256
