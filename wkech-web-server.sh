@@ -603,15 +603,7 @@ then
             # alias case
             alvals=${be_alias_arr[${beor}]}
             echo "Setting up alias for $beor as $alvals"
-            if [[ "$alvals" == "DELETE" ]]
-            then
-                # a signal that BE doesn't do ECH so signal we want to publish
-                # an "empty" .well-known
-                # TODO: is DELETE reasonable
-                makealiasjson "$lmf" "$dur" ''
-            else
-                makealiasjson "$lmf" "$dur" "$alvals"
-            fi
+            makealiasjson "$lmf" "$dur" "$alvals"
 
         fi
 
