@@ -99,7 +99,7 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
     logging.info(f"Processing update for ({hostname}, {port}, {target})")
     checked = check_wkech(hostname, port=port, target=target, regeninterval=regeninterval, tout=args.timeout)
     if not checked['OK']:
-        logging.warning(f"Validation failed for ({hostname}, {port}, {target})")
+        logging.error(f"Validation failed for ({hostname}, {port}, {target})")
     elif not checked['Update']:
         logging.info(f"No update needed for ({hostname}, {port}, {target})")
     else:
@@ -122,7 +122,7 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
                 logging.info("Dry run in progress: skipping update")
                 continue
             if dns.name.from_text('__') in keyring[0]:
-                logging.debug(f"Attempting update {repr(lupdate)} with invalid key")
+                logging.error(f"Attempting update {repr(lupdate)} with invalid key")
             try:
                 lresponse = dns.query.tcp(lupdate, '::1', timeout=args.timeout)
                 logging.debug(f"Update response: {lresponse}")

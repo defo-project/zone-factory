@@ -233,7 +233,7 @@ def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str,
     return dns.zonefile.read_rrsets('\n'.join(rrset)) # List (singleton) of dns.rrset objects
 
 # TODO: check what happens if JSON is empty (spec says
-#       that means delete, but we probably dislike that)
+#       that used mean delete)
 def check_wkech(hostname, regeninterval=3600, target=None, port=None, tout=1.0) -> dict: # in use
     """Compare WKECH data against existing HTTPS RRset (if any), and validate WKECH data"""
     logging.debug(f"Entered check_wkech with args:")
