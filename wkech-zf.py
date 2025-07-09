@@ -129,7 +129,6 @@ def apply_update(args, hostname, port, target=None, regeninterval=3600):
                 logging.info(f"Success updating ({hostname}, {port}, {target})")
             except dns.exception.DNSException as e:
                 logging.error(f"DNS Exception: {e}")
-                
     return result
 
 def run_batch(args):
@@ -138,9 +137,9 @@ def run_batch(args):
     with open(todo, newline='') as csvfile:
         try:
             signal.signal(signal.SIGALRM, alarm_handler)
-            signal.alarm(int(args.timeout))
             readCSV = csv.reader(csvfile, delimiter=",")
             for row in readCSV:
+                signal.alarm(int(args.timeout))
                 logging.debug(f"Parsing row from file '{todo}': {row}")
                 if len(row) < 1 or not row[0]:
                     continue    # skip empties
@@ -161,9 +160,10 @@ def run_batch(args):
                     result += apply_update(args, hostname, port, target=alias, regeninterval=regeninterval)
                 except Exception as e:
                     logging.error(f"Exception processing {row}, {e}")
-            signal.alarm(0)
+                signal.alarm(0)
         except TimeOutException as t:
-            logging.error(f"Timeout processing {rpw}, {e}")
+            logging.error(f"Timeout processing {row}, {e}")
+            signal.alarm(0)
     return result
 
 def main() -> None:

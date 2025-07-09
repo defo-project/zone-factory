@@ -117,17 +117,18 @@ def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, dept
 
 def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, target=None, tout=1.0) -> ECHresult: # in use
     logging.debug(f"Accessing service providing 'https://{hostname}:{port}/' with target '{target}'")
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    context.load_verify_locations(certifi.where())
-    context.options |= ssl.OP_ECH_GREASE
-    for config in ech_configs:
-        try:
-            context.set_ech_config(config)
-            context.check_hostname = False
-        except ssl.SSLError as e:
-            logging.error(f"SSL error for {hostname}:{port} -- {e}")
-            pass
+    logging.debug(f"and ECHConfigList of {ech_configs}")
     try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.load_verify_locations(certifi.where())
+        context.options |= ssl.OP_ECH_GREASE
+        for config in ech_configs:
+            try:
+                context.set_ech_config(config)
+                context.check_hostname = False
+            except ssl.SSLError as e:
+                logging.error(f"SSL error for {config} for {hostname}:{port} -- {e}")
+                pass
         with socket.create_connection((target or hostname, port)) as sock:
             sock.settimeout(tout)
             logging.debug(f"Set socket timeout to {tout}")
@@ -162,8 +163,8 @@ def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, 
                             break
                         response += data
                 return ECHresult({"ech_status": status, "response": response})
-    except socket.gaierror as e:
-        logging.warning(f"socket error for {target or hostname}:{port} -- {e}")
+    except Exception as e:
+        logging.warning(f"Exception {target or hostname}:{port} -- {e}")
         return ECHresult({'ech_status': None, 'response': b''})
 
 def get_http(hostname, port, path, ech_configs, target=None, tout=1.0) -> bytes: # in use
@@ -332,8 +333,7 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None, tout=1.0) 
                 # Next endpoint
             if bad_endpoints == 0:
                 result['OK'] = True
-                # TODO: check this is correct
-                #       rrset[0] is question, so rrset[:1] is "all but question"
+                # rrset[0] is question, so rrset[:1] is "all but question"
                 result['Update'] = rrset[:1]
         else:
             logging.debug(f"Generated RRset matches published one")
