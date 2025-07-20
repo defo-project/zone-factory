@@ -102,6 +102,18 @@ function hostport2port()
     echo "$port"
 }
 
+function getechconfigid()
+{
+    file="$1"
+    tmp=$("$OSSL/apps/openssl" ech -in "$file" -text 2>&1 | grep fe0d)
+    if [[ "$tmp" != "" ]]
+    then
+        echo ${tmp:7:2}
+    else
+        echo "NONE"
+    fi
+}
+
 function makecheckdir()
 {
     user="$1"
@@ -438,6 +450,16 @@ then
         if ((newest >= (dur-1)))
         then
             echo "Time for a new key pair (newest as old or older than $dur)"
+            # accumulate existing config_id values so we don't produce a
+            # collision (we'll reject colliding ones)
+            configids=""
+            for file in "$ECHDIR/$fehost.$feport/"*.pem.ech
+            do
+                cid=$(getechconfigid "$file")
+                configids="$configids $cid "
+            done
+            echo "Existing config_id values: $configids"
+
             "$OSSL/apps/openssl" ech -public_name "$fehost" \
                 -out "$ECHDIR/$fehost.$feport/$keyn.pem.ech"
             res=$?
@@ -446,9 +468,28 @@ then
                 echo "Error generating $ECHDIR/$fehost.$feport/$keyn.pem.ech"
                 exit 15
             fi
+            # check for collision
+            newf="$ECHDIR/$fehost.$feport/$keyn.pem.ech"
+            newid=$(getechconfigid "$newf")
+            echo "New config_id: $newid"
+            while [[ $configids == *" $newid "* ]]
+            do
+                # got a collision!
+                echo "Got a config_id collision, new is $newid"
+                echo "Others are $configids"
+                "$OSSL/apps/openssl" ech -public_name "$fehost" \
+                    -out "$ECHDIR/$fehost.$feport/$keyn.pem.ech"
+                res=$?
+                if [[ "$res" != "0" ]]
+                then
+                    echo "Error generating $ECHDIR/$fehost.$feport/$keyn.pem.ech"
+                    exit 15
+                fi
+                newid=$(getechconfigid "$newf")
+                echo "New-new config_id: $newid"
+            done
             actiontaken="true"
             restartactiontaken="true"
-            newf="$ECHDIR/$fehost.$feport/$keyn.pem.ech"
         fi
 
         if [[ "$JUSTONE" == "yes" ]]
