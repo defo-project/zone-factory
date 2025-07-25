@@ -109,12 +109,23 @@ command shell.
 
 6.  Install required Python packages
 	```
-	pip install certifi dnspython httptools
+	pip install certifi dnspython httptools bind9_parser
 	```
-
 7.  Try out the only zone-factory script currently available
 	```
 	python3 ./updzone-from-wkech.py -h
 	python3 ./updzone-from-wkech.py fetch https://defo.ie/
 	python3 ./updzone-from-wkech.py -v fetch https://defo.ie/
 	```
+
+8.  Python code coverage
+
+    We'll give https://coverage.readthedocs.io/en/7.9.1/ a try...
+    
+    Inside the virtual environment:
+
+	```
+    pip install coverage
+    ```
+
+    That needs sqlite3 which isn't yet in my ECH-enabled cpython build.
