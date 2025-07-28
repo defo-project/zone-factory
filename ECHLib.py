@@ -1,30 +1,30 @@
-import argparse
+# [unreferenced] import argparse
 import base64
-import json
+import json                     # used only in check_wkech()
 import logging
-import socket
+import socket                   # used only in access_origin()
 import ssl
-import sys
-import os
-import urllib.parse
+import sys                      # used only when __name__ == "__main__"
+# [unreferenced] import os
+# [unreferenced] import urllib.parse
 from typing import List, OrderedDict, TypedDict, NotRequired, Union, Tuple, Sequence, Optional
-from urllib.parse import ParseResult
-import certifi
-import httptools
-import csv
-import dns.message
+# [unreferenced] from urllib.parse import ParseResult
+import certifi                  # used only in access_origin()
+import httptools                # used only in definition of class HTTPResponseParser
+# [unreferenced] import csv
+# [unreferenced] import dns.message
 import dns.name
-import dns.rdataclass
-import dns.rdatatype
+# [unreferenced] import dns.rdataclass
+# [unreferenced] import dns.rdatatype
 import dns.resolver
-import dns.zonefile
-import dns.tsigkeyring
-import dns.update
-import dns.exception
+import dns.zonefile             # used only in wkech_to_HTTPS_rrset()
+# [unreferenced] import dns.tsigkeyring
+# [unreferenced] import dns.update
+# [unreferenced] import dns.exception
 
 class ECHConfigList:
-    import base64
-    import logging
+    import base64               # already imported; really needed here ?
+    import logging              # same question
 
     def __len__(self):
         return len(self.body)
