@@ -104,16 +104,25 @@ def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, dept
         return result
     except Exception as e:
         logging.critical(f"DNS query failed: {e}")
-        return result
+        return result # TODO: check invoking code; may need [None} rather than []
     result = [ans]
     # We wondered if this might this accept an HTTPS RR from the additional section.
     # testing seems to indicate not.
+    #
+    # Notes:
+    # 1. Test used may suffer from confirmation bias, as query used seems to exclude
+    #    possibility of HTTPS occurring in the additional section;
+    # 2. Concern seems moot, as additional section is in "another part of the forest"
+    #    (specifically ans.response.additional), which is ignored when traversing
+    #    ans as a list of RRs.
     rrs = list(filter(lambda a: a.rdtype == 65, ans))
     if len(rrs):
         rrs.sort(key=lambda a: a.priority)
         if follow_alias and rrs[0].priority == 0:
             result +=  get_https_rrchain(rrs[0].target, follow_alias=(depth>0), depth=depth-1)
     return result
+
+### --- Reviewed as far as here -------------------------
 
 def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, target=None, tout=1.0) -> ECHresult: # in use
     logging.debug(f"Accessing service providing 'https://{hostname}:{port}/' with target '{target}'")
