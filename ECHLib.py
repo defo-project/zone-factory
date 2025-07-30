@@ -1,3 +1,7 @@
+#
+# TODO: run pylint against this file, and remediate as appropriate
+# Note current report: Your code has been rated at 4.48/10
+#
 # [unreferenced] import argparse
 import base64
 import json                     # used only in check_wkech()
@@ -122,8 +126,6 @@ def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, dept
             result +=  get_https_rrchain(rrs[0].target, follow_alias=(depth>0), depth=depth-1)
     return result
 
-### --- Reviewed as far as here -------------------------
-
 def access_origin(hostname, port, path='', ech_configs=None, enable_retry=True, target=None, tout=1.0) -> ECHresult: # in use
     logging.debug(f"Accessing service providing 'https://{hostname}:{port}/' with target '{target}'")
     logging.debug(f"and ECHConfigList of {ech_configs}")
@@ -192,9 +194,9 @@ def wkech_to_HTTPS_rrset(svcbname: dns.name.Name|str,
     dnstype = 'HTTPS'
     # default priority if none explicitly specified
     priority = 1
+    alias_priority = 0          # just do this once, rather than per-endpoint
     for endpoint in wkechdata['endpoints']:
         if 'alias' in endpoint:
-            alias_priority = 0
             target = endpoint['alias']
             rr = f"{dns.name.from_text(svcbname)} {ttl} {dnstype} {alias_priority} {target}"
             # logging.debug(f"RR generated from WKECH: {rr}")
@@ -295,7 +297,8 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None, tout=1.0) 
                   f"echconfigs {list(map(lambda x: base64.b64encode(x).decode('utf-8'), ech_configs))}")
     response = parse_http_response(get_http(hostname, port, "/.well-known/origin-svcb", ech_configs, alias, tout))
     if response['status_code'] == 200: # or could test 'reason' for 'OK'
-        wkresponse = json.loads(response['body'])
+        # TODO: check whether need to rectify() and/or fill in regeninterval
+        wkresponse = json.loads(response['body']) 
     else:
         wkresponse = None
         logging.warning(f"Unable to retrieve data from {wkurl}")
@@ -348,7 +351,7 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None, tout=1.0) 
             logging.debug(f"Generated RRset matches published one")
             result['OK'] = True
     return result
-
+ 
 if __name__ == "__main__":
     print("This is a library:-)")
     sys.exit(1)
