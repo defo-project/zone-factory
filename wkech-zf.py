@@ -16,13 +16,13 @@ specific tools.
 
 This currently implements the -08 version of the spec.
 
-DNS queries in suppor of HTTPS requests (e.g. to acquire
-the wkech JSON) use the system stub resolver. DNS queries
-and updates related to checking HTTPS RR values use a
-hard-coded stub resolver talking to '::1.53'. If that
-doesn't match the local (e.g. bind) setup for update
-policy, then you'll need to modify this code.
-
+DNS queries in support of HTTPS requests (e.g. to acquire
+the wkech JSON) use the default stub resolver, which talks
+to the system resolver. DNS queries and updates related to
+checking HTTPS RR values use a hard-coded stub resolver
+talking to '::1.53'. If that doesn't match the local
+(e.g. bind) setup for update policy, then you'll need to
+modify this code.
 '''
 
 # Load in a set of library functions
@@ -56,7 +56,6 @@ def map_tsig_alg(instring):
     except Exception as e:
         return dns.tsig.HMAC_SHA256
     return dns.tsig.HMAC_SHA256
-
 
 def load_keyring(keyfile):
     '''
