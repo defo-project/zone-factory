@@ -1,6 +1,7 @@
 from ssl import ECHStatus       # FAIL if ECH support not included
 
 import argparse                 # parse CLI
+import textwrap
 import logging                  # handle messages
 
 from typing import List, OrderedDict, TypedDict, NotRequired, Union, Tuple, Sequence, Optional
@@ -593,14 +594,14 @@ def setupLogging(verbosity:int=1) -> None:
 
 def cliparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        # usage='%(prog)s [options]',
-        description="""
-        This script implements the synchronization function
-        of the Zone Factory behaviour described in section 6.2
-        of the Internet Draft specifying "A well-known URI
-        for publishing service parameters"
-        (https://datatracker.ietf.org/doc/html/draft-ietf-tls-wkech).
-
+        formatter_class=argparse.RawTextHelpFormatter,
+        # formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent("""
+        This script implements the Zone Factory synchronization function
+        described in section 6.2 of the Internet Draft specifying
+        "A well-known URI for publishing service parameters"
+        (https://datatracker.ietf.org/doc/html/draft-ietf-tls-wkech)."""),
+        epilog=textwrap.dedent("""
         Implementation restrictions:
 
         1.  Periodic synchronization is not implemented. The zone
@@ -608,13 +609,14 @@ def cliparser() -> argparse.ArgumentParser:
             by a job scheduler or daemon, as required.
 
         2.  Support for arbitrary SVCB-compatible record types
-            is neither implemented nor planned.""",
-        # formatter_class=argparse.RawTextHelpFormatter,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+            is neither implemented nor planned.""")
     )
     parser.add_argument(
         'config', nargs='?', default=None,
-        help='file specifying which HTTP origins are to be processed. (default: %(default)s)',
+        help=textwrap.dedent('''\
+        file specifying which HTTP origins are to be processed
+        (required; default: %(default)s).
+        ''')
     )
     parser.add_argument(
         "-n", "--dryrun", "--dry-run", action="store_true",
@@ -622,12 +624,12 @@ def cliparser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '-v', '--verbose', default=1, action='count',
-        help="""\
-        make logging (progressively, if repeated) more verbose.
+        help=textwrap.dedent("""\
+        make logging (progressively) more verbose.
         By default, WARNING messages are shown;
-        to add INFO messages, use '-v'; for DEBUG messages
-        as well, use '-v -v' or '-vv' (default: %(default)s).
-        """
+        to add INFO messages, use '-v';
+        for DEBUG messages as well, use '-v -v' or '-vv'.
+        """)
     )
     parser.add_argument(
         '-q', '--quiet',
@@ -636,26 +638,31 @@ def cliparser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "-s", "--nameserver", "--name-server", default="::1", nargs='?',
-        help="DNS name server to use instead of system resolver (default: %(default)s)"
+        help=textwrap.dedent("""\
+        DNS name server to use instead of system resolver
+        (default: %(default)s).
+        """)
     )
     parser.add_argument(
         "-b", "--become", action="store_true",
-        help="""\
-        Use privilege escalation for invoking pdnsutil.
-        See also options '--become-method', '--become-user'
-        """
+        help=textwrap.dedent("""\
+        Use privilege escalation for invoking pdnsutil
+        (see also: '--become-method', '--become-user').""")
     )
     parser.add_argument(
         "--become-method", default="sudo", nargs="?",
-        help="Utility to use to escalate privilege for pdnsutil (default: %(default)s)."
+        help=textwrap.dedent("""\
+        Utility to use to escalate privilege for pdnsutil
+        (default: %(default)s).""")
     )
     parser.add_argument(
         "--become-user", default="pdns", nargs="?",
-        help="User ID to use to escalate privilege for pdnsutil (default: %(default)s)."
+        help=textwrap.dedent("""\
+        User ID to use to escalate privilege for pdnsutil
+        (default: %(default)s).""")
     )
     parser.add_argument(
-        "-f", "--format", default="CSV",
-        choices=['CSV'],
+        "-f", "--format", default="CSV", choices=['CSV'],
         help="format of configuration file (CSV only for now)")
 
     # -- more, as needed
