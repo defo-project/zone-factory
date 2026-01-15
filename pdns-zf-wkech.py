@@ -614,7 +614,7 @@ def cliparser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         'config', nargs='?', default=None,
-        help='file specifying which HTTP origins are to be processed.',
+        help='file specifying which HTTP origins are to be processed. (default: %(default)s)',
     )
     parser.add_argument(
         "-n", "--dryrun", "--dry-run", action="store_true",
@@ -626,7 +626,7 @@ def cliparser() -> argparse.ArgumentParser:
         make logging (progressively, if repeated) more verbose.
         By default, WARNING messages are shown;
         to add INFO messages, use '-v'; for DEBUG messages
-        as well, use '-v -v' or '-vv'.
+        as well, use '-v -v' or '-vv' (default: %(default)s).
         """
     )
     parser.add_argument(
@@ -636,7 +636,7 @@ def cliparser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "-s", "--nameserver", "--name-server", default="::1", nargs='?',
-        help="DNS name server to use instead of system resolver"
+        help="DNS name server to use instead of system resolver (default: %(default)s)"
     )
     parser.add_argument(
         "-b", "--become", action="store_true",
@@ -647,11 +647,11 @@ def cliparser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--become-method", default="sudo", nargs="?",
-        help="Utility to use to escalate privilege for pdnsutil."
+        help="Utility to use to escalate privilege for pdnsutil (default: %(default)s)."
     )
     parser.add_argument(
         "--become-user", default="pdns", nargs="?",
-        help="User ID to use to escalate privilege for pdnsutil."
+        help="User ID to use to escalate privilege for pdnsutil (default: %(default)s)."
     )
     parser.add_argument(
         "-f", "--format", default="CSV",
