@@ -93,6 +93,8 @@ def parse_http_response(response_bytes): # in use
         "body": bytes(parser.body),
     }
 
+# retrieve HTTPS RRs, following aliasMode entries until the depth-limit is reached
+# the result is a (possibly empty) list of RRs found
 def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, depth = 8 # in use
                     ) -> List[Optional[dns.resolver.Answer]]:
     result: list[Optional[dns.resolver.Answer]] = []
@@ -111,6 +113,9 @@ def get_https_rrchain(domain: dns.name.Name|str, follow_alias: bool = True, dept
     rrs = list(filter(lambda a: a.rdtype == 65, ans))
     if len(rrs):
         rrs.sort(key=lambda a: a.priority)
+        # RFC9460 calls for not mixing alias and service modes, and for randomly
+        # picking one aliasMode RR if there're >1 but we're not enforcing that
+        # here (yet) - TODO: revisit
         if follow_alias and rrs[0].priority == 0:
             result +=  get_https_rrchain(rrs[0].target, follow_alias=(depth>0), depth=depth-1)
     return result
@@ -281,7 +286,6 @@ def check_wkech(hostname, regeninterval=3600, target=None, port=None, tout=1.0) 
             alias = str(select_rr.target)
             if alias == '.':
                 alias = None if depth == 1 else str(focus.name)
-        
     logging.debug(f"Using alias '{alias}', "
                   f"echconfigs {list(map(lambda x: base64.b64encode(x).decode('utf-8'), ech_configs))}")
     response = parse_http_response(get_http(hostname, port, "/.well-known/origin-svcb", ech_configs, alias, tout))
