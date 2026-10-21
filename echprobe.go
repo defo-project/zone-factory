@@ -64,6 +64,7 @@ var verbose bool = false
 var super_verbose bool = false
 var doh_url string = ""
 var thepile []ECHConfigListDets
+var total_checked_good int
 
 func get_target_url(host string, port string) (string) {
     var url string
@@ -301,7 +302,7 @@ func get_retry_configs(host string, port string,
     fakeECH_good_pn[5]=byte((elen-6)%256)
 
     if super_verbose {
-        fmt.Printf("Fake ECHConfig %s\n",
+        fmt.Printf("\nFake ECHConfig to try get retry-configs  %s\n",
             base64.StdEncoding.EncodeToString(fakeECH_good_pn))
     }
 
@@ -339,7 +340,6 @@ func get_https_rrs(host string, port string) ([]byte, error) {
     url, err := url.Parse(fmt.Sprintf("%s?name=%s&type=%s",
                             doh_url, qname, qtype))
     if err != nil {
-        log.Fatal(err)
         return nil, err
     }
     client := &http.Client{}
@@ -351,13 +351,11 @@ func get_https_rrs(host string, port string) ([]byte, error) {
         URL: url,
     })
     if err != nil {
-        log.Fatal(err)
         return nil, err
     }
     defer resp.Body.Close()
     data, err := io.ReadAll(resp.Body)
     if err != nil {
-        log.Fatal(err)
         return nil, err
     }
     if super_verbose {
@@ -380,7 +378,7 @@ func verify_configs(host string, port string,
         if thislen <= 0 || offset + thislen >= olen {
             fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
                         olen, offset, thislen)
-            log.Fatal("bad encoding\n")
+            return 0, nil, errors.New("ECHConfigList decode error (1)")
         }
         thiscfg := []byte { byte((thislen+4)/256), byte((thislen+4)%256),
                             0xfe, 0x0d }
@@ -465,6 +463,7 @@ func verify_thepile() {
                                p.name, p.port, j, p.source)
                 }
                 thepile[i].details[j].works = true
+                total_checked_good += 1
             } else {
                 if verbose {
                     fmt.Printf("Failed to verify %s:%s entry %d\n",
@@ -511,8 +510,22 @@ func nsupdate_stanza(ownername string, ttl int, priority int,
 
 func pdns_stanza(ownername string, ttl int, priority int,
                      targ string, ecl []byte) {
-    fmt.Printf("update add %s %d HTTPS %d %s %s\n",
-        ownername, ttl, priority, targ,
+    // pdns needs the (I guess) zone name (e.g. 2LD) so we guess
+    // it's the last two labels of the ownername
+    var two_ld string
+    tldind := strings.LastIndex(ownername, ".")
+    if tldind == -1 {
+        two_ld = "example.com"
+    } else {
+        two_ldind := strings.LastIndex(ownername[0:tldind],".")
+        if two_ldind == -1 {
+            two_ld = ownername
+        } else {
+            two_ld = ownername[two_ldind+1:]
+        }
+    }
+    fmt.Printf("pdnsutil rrset replace %s %s HTTPS %d %d %s %s\n",
+        two_ld, ownername, ttl, priority, targ,
         base64.StdEncoding.EncodeToString(ecl))
 }
 
@@ -520,7 +533,7 @@ func print_dns_instrs(pile []ECHConfigListDets, otype string,
                       source string, grouping string) {
     // print dns update commands as directed
     // TODO: extract/guess ttl/priority/targ-name from elsewhere
-    // TODO: for now we just have defaults
+    // TODO: consider other HTRPS RR content (ipv4hint etc.)
     ttl := 3600
     priority := 1
     targetname := "."
@@ -531,13 +544,11 @@ func print_dns_instrs(pile []ECHConfigListDets, otype string,
     if thepile[0].port == "443" {
         ownername = thepile[0].name
     } else {
-        ownername = "_" + thepile[0].port + "_https" + thepile[0].name
+        ownername = "_" + thepile[0].port + "_https." + thepile[0].name
     }
     if otype == "nsupdate" {
         fmt.Printf("update delete HTTPS %s\n", ownername)
-    } else if otype == "pdns" {
-        fmt.Printf("pdns delete HTTPS %s\n", ownername)
-    }
+    } // nothing similar needed for pdns afaik (but I may be wrong)
     for _,p := range pile {
         if source != "all" && source != p.source {
             continue
@@ -552,9 +563,11 @@ func print_dns_instrs(pile []ECHConfigListDets, otype string,
             for _,d := range p.details {
                 // do one-by-one
                 if otype == "nsupdate" {
-                    nsupdate_stanza(ownername, 1, 1, ".", d.singleton)
+                    nsupdate_stanza(ownername, ttl, priority, targetname,
+                                    d.singleton)
                 } else if otype == "pdns" {
-                    pdns_stanza(ownername, 1, 1, ".", d.singleton)
+                    pdns_stanza(ownername, ttl, priority, targetname,
+                                        d.singleton)
                 }
             }
         }
@@ -569,6 +582,7 @@ func main() {
     var outputsource string
     var outputgrouping string
     public_name := ""
+    total_checked_good = 0
 
     // command line args
     flag.StringVar(&targetName, "n", "defo.ie", "DNS name to probe")
@@ -642,12 +656,16 @@ func main() {
     // check for HTTPS RRs
     https_rrs, err := get_https_rrs(targetName, targetPort)
     if err != nil {
-        log.Fatalf("get https_rrs fail: %v\n", err)
+        if super_verbose {
+            fmt.Printf("get https_rrs fail: %v\n", err)
+        }
     }
     // unmarshall and pull out ech= strings
     var https_rrs_json map[string]any
     if err = json.Unmarshal(https_rrs, &https_rrs_json); err != nil {
-        log.Fatalf("unmarshal fail: %v\n", err)
+        if super_verbose {
+            fmt.Printf("unmarshal fail: %v\n", err)
+        }
     }
     var dns_configs [][]byte
     dns_ans := https_rrs_json["Answer"]
@@ -656,7 +674,9 @@ func main() {
     }
     var ansarr []any
     if dns_ans == nil {
-        fmt.Println("No real Answer in DNS response\n")
+        if verbose {
+            fmt.Println("No real Answer in DNS response\n")
+        }
         ansarr = nil
     } else {
         ansarr = dns_ans.([]any)
@@ -695,6 +715,10 @@ func main() {
 
     // for each singleton, check if it works
     verify_thepile()
+
+    if total_checked_good == 0 {
+        log.Fatal("No checked good ECHConfig values found")
+    }
 
     // produce some output
     if outputtype == "summary" {
