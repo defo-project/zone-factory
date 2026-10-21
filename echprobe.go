@@ -410,6 +410,32 @@ func print_suites(d ECHConfigDets) (string) {
 	return rv
 }
 
+func verify_thepile() {
+	// iterate over the pile, checking if the singletons work
+	// note using 'range' gets copies so we seemingly need to 
+	// iterate using the loop form below to change values in
+	// 'thepile'
+	for i := 0; i < len(thepile); i++ {
+		p := thepile[i]
+		for j := 0; j < len(p.details); j++ {
+			d := p.details[j]
+			count, _, err := verify_configs(p.name, p.port, d.singleton)
+			if err == nil && count == 1 {
+				if verbose {
+					log.Printf("Verified %s:%s entry %d\n",
+						       p.name, p.port, j)
+				}
+				thepile[i].details[j].works = true
+			} else {
+				if verbose {
+					log.Printf("Failed to verify %s:%s entry %d\n",
+						       p.name, p.port, j)
+				}
+			}
+		}
+	}
+}
+
 func print_pile(pile []ECHConfigListDets) {
 	// basic print for the pile
 	for i,p := range pile {
@@ -567,14 +593,16 @@ func main() {
         }
     }
 
+	verify_thepile()
 	print_pile(thepile)
     //fmt.Println(thepile)
 
     // TODO: apply heuristics to produce inferred HTTPS RR desiderata
     // principle: try just replace ECHConfig values and leave all else the same
     // whenever change is needed
-    desiredECH := retry_configs
 
+	/*
+    desiredECH := retry_configs
     // verify if desiderata function
     var count int
     var goodones []byte
@@ -587,6 +615,8 @@ func main() {
         fmt.Printf("goodones %d: %s\n", count,
             base64.StdEncoding.EncodeToString(goodones))
     }
+	*/
+
     // TODO: verify if desiderata differ from status quo
     // status quo
 
