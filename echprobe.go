@@ -34,7 +34,7 @@ type ECHConfigListDets struct {
     name string // what'd be in an inner SNI
     port string // service port (usually 443)
     source string // retry-config or origin-svcb or dns
-    original any // the original form in which we got this (e.g. DNS transaction)
+    original any // original form in which we got this (e.g. DNS transaction)
     list []byte // the encoded ECHConfigList
     details []ECHConfigDets
 }
@@ -404,9 +404,34 @@ func add_to_pile(host string, port string, source string, original any,
     return nil
 }
 
-//func print_pile(pile []ECHConfigListDets) {
-    //return
-//}
+func print_suites(d ECHConfigDets) (string) {
+	// make this nicer later via names for codepoints
+	rv := fmt.Sprintf("%s/%s/%s", d.kem, d.kdf, d.aead)
+	return rv
+}
+
+func print_pile(pile []ECHConfigListDets) {
+	// basic print for the pile
+	for i,p := range pile {
+		fmt.Printf("List %d, source %s:\n",i, p.source)
+		if p.port != "443" {
+			fmt.Printf("\tname: %s:%s\n", p.name, p.port)
+		} else {
+			fmt.Printf("\tname: %s\n", p.name)
+		}
+		fmt.Printf("\tList: %s\n",
+                   base64.StdEncoding.EncodeToString(p.list))
+	    for j,d := range p.details {
+			fmt.Printf("\t\tSingleton %d\n", j)
+			fmt.Printf("\t\tVersion: %s, config_id: %s, checked: %t\n",
+					   d.version, d.config_id, d.works)
+		    fmt.Printf("\t\tpublic_name: %s\n", d.public_name)
+			fmt.Printf("\t\tHPKE suites: %s\n", print_suites(d))
+			fmt.Printf("\t\tSingleton: %s\n",
+					   base64.StdEncoding.EncodeToString(d.singleton))
+		}
+	}
+}
 
 func main() {
     var targetName string
@@ -437,7 +462,9 @@ func main() {
     if err == nil {
         var os_j map[string]any
         if err = json.Unmarshal(origin_svcb, &os_j); err != nil {
-            log.Printf("unmarshal fail: %v\n", err)
+            if verbose {
+                log.Printf("origin_svcb unmarshal fail: %v\n", err)
+            }
         } else {
             //fmt.Println("osj:", os_j)
             //fmt.Printf("type osj: %T\n", os_j)
@@ -458,8 +485,11 @@ func main() {
                 ec, err := base64.StdEncoding.DecodeString(e0)
                 if err != nil {
                     fmt.Printf("error parsing origin-svcb: %v\n", err)
+                }
+				if verbose && err == nil {
+					fmt.Printf("ECHConfigList value from origin_svcb %s\n", ec)
 				}
-				if add_to_pile(targetName, targetPort,
+                if add_to_pile(targetName, targetPort,
                                "origin-svcb", origin_svcb, ec) != nil {
                     fmt.Printf("add_to_pile error for origin-svcb: %v\n", err)
                 }
@@ -471,7 +501,7 @@ func main() {
     if public_name == "" {
         public_name, err = get_public_name_conn(targetName, targetPort)
         if verbose && err == nil {
-            fmt.Printf("public name: %s\n", public_name)
+            fmt.Printf("public name from conn: %s\n", public_name)
         }
     }
 
@@ -513,8 +543,8 @@ func main() {
             for _, v := range fvals {
                 place := strings.LastIndex(v, "ech=")
                 if place != -1 {
-                    if super_verbose {
-                        fmt.Println("HTTPS RR ech ", v[place+4:])
+                    if verbose {
+                        fmt.Println("ECHConfigList from HTTPS RR", v[place+4:])
                     }
                     dec, err := base64.StdEncoding.DecodeString(v[place+4:])
                     if err == nil {
@@ -536,6 +566,9 @@ func main() {
                 base64.StdEncoding.EncodeToString(d))
         }
     }
+
+	print_pile(thepile)
+    //fmt.Println(thepile)
 
     // TODO: apply heuristics to produce inferred HTTPS RR desiderata
     // principle: try just replace ECHConfig values and leave all else the same
@@ -559,6 +592,4 @@ func main() {
 
     // TODO: if status quo != desiderata output suggested nsupdate or
     // pdns_util stanzas or HTTPS RR values
-
-    fmt.Println(thepile)
 }
