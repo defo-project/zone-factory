@@ -1,4 +1,25 @@
-// Add LICENSE stuff
+/*
+ * Copyright (C) 2026 Stephen Farrell, stephen.farrell@cs.tcd.ie
+ * Copyright (C) 2026 Tolerant Networks Limited
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
 
 package main
 
@@ -58,7 +79,9 @@ func get_origin_svcb(host string, port string) ([]byte, error) {
     targetURL := get_target_url(host, port)
     url, err := url.Parse(targetURL)
     if err != nil {
-        log.Fatal(err)
+    	if super_verbose {
+            fmt.Printf("url.Parse failed for %s: %v", targetURL, err)
+    	}
         return nil, err
     }
     client := &http.Client{}
@@ -70,18 +93,25 @@ func get_origin_svcb(host string, port string) ([]byte, error) {
         URL: url,
     })
     if err != nil {
-        log.Fatalf("failed to perform request %s: %v", targetURL, err)
+    	if super_verbose {
+            fmt.Printf("failed to perform request %s: %v", targetURL, err)
+    	}
+        return nil, err
     }
     defer resp.Body.Close()
     if super_verbose {
-        fmt.Printf("origin-svcb resp status code: %d\n", resp.StatusCode)
+    	fmt.Printf("%s resp status code: %d\n", targetURL, resp.StatusCode)
     }
     if resp.StatusCode != 200 {
-        return []byte{}, err
+        return nil, err
     }
     bodyBytes, err := io.ReadAll(resp.Body)
     if err != nil {
-        log.Fatalf("failed to read response body: %v", err)
+        log.Printf("failed to read response body: %v", err)
+        return nil, err
+    }
+    if super_verbose {
+        fmt.Printf("%s\n", string(bodyBytes))
     }
     return bodyBytes, err
 }
@@ -249,11 +279,20 @@ func get_retry_configs(host string, port string,
     // will need public name and 2 zero octets for
     // empty extensions appended
 
-    pnlen := byte(len(public_name) % 255)
-    p1 := []byte { pnlen }
-    p2 := []byte(public_name)
-    p3 := []byte { 0x00, 0x00 }
-    fakeECH_good_pn := slices.Concat(part_fakeECH, p1, p2, p3)
+    var fakeECH_good_pn []byte
+    if public_name != "" {
+        pnlen := byte(len(public_name) % 255)
+        p1 := []byte { pnlen }
+        p2 := []byte(public_name)
+        p3 := []byte { 0x00, 0x00 }
+        fakeECH_good_pn = slices.Concat(part_fakeECH, p1, p2, p3)
+    } else { // use host
+        pnlen := byte(len(host) % 255)
+        p1 := []byte { pnlen }
+        p2 := []byte(host)
+        p3 := []byte { 0x00, 0x00 }
+        fakeECH_good_pn = slices.Concat(part_fakeECH, p1, p2, p3)
+    }
     // fixup lengths
     elen := len(fakeECH_good_pn)
     fakeECH_good_pn[0]=byte((elen-2)/256)
@@ -405,64 +444,73 @@ func add_to_pile(host string, port string, source string, original any,
 }
 
 func print_suites(d ECHConfigDets) (string) {
-	// make this nicer later via names for codepoints
-	rv := fmt.Sprintf("%s/%s/%s", d.kem, d.kdf, d.aead)
-	return rv
+    // make this nicer later via names for codepoints
+    rv := fmt.Sprintf("%s/%s/%s", d.kem, d.kdf, d.aead)
+    return rv
 }
 
 func verify_thepile() {
-	// iterate over the pile, checking if the singletons work
-	// note using 'range' gets copies so we seemingly need to 
-	// iterate using the loop form below to change values in
-	// 'thepile'
-	for i := 0; i < len(thepile); i++ {
-		p := thepile[i]
-		for j := 0; j < len(p.details); j++ {
-			d := p.details[j]
-			count, _, err := verify_configs(p.name, p.port, d.singleton)
-			if err == nil && count == 1 {
-				if verbose {
-					log.Printf("Verified %s:%s entry %d\n",
-						       p.name, p.port, j)
-				}
-				thepile[i].details[j].works = true
-			} else {
-				if verbose {
-					log.Printf("Failed to verify %s:%s entry %d\n",
-						       p.name, p.port, j)
-				}
-			}
-		}
-	}
+    // iterate over the pile, checking if the singletons work
+    // note using 'range' gets copies so we seemingly need to 
+    // iterate using the loop form below to change values in
+    // 'thepile'
+    for i := 0; i < len(thepile); i++ {
+    	p := thepile[i]
+    	for j := 0; j < len(p.details); j++ {
+    		d := p.details[j]
+    		count, _, err := verify_configs(p.name, p.port, d.singleton)
+    		if err == nil && count == 1 {
+    			if verbose {
+    				fmt.Printf("Verified %s:%s singleton %d from %s\n",
+    					       p.name, p.port, j, p.source)
+    			}
+    			thepile[i].details[j].works = true
+    		} else {
+    			if verbose {
+    				fmt.Printf("Failed to verify %s:%s entry %d\n",
+    					       p.name, p.port, j)
+    			}
+    		}
+    	}
+    }
 }
 
-func print_pile(pile []ECHConfigListDets) {
-	// basic print for the pile
-	for i,p := range pile {
-		fmt.Printf("List %d, source %s:\n",i, p.source)
-		if p.port != "443" {
-			fmt.Printf("\tname: %s:%s\n", p.name, p.port)
-		} else {
-			fmt.Printf("\tname: %s\n", p.name)
-		}
-		fmt.Printf("\tList: %s\n",
+func print_pile(pile []ECHConfigListDets, source string) {
+    // summary print for the pile
+    for i,p := range pile {
+    	if source != "all" && source != p.source {
+    		continue
+    	}
+    	fmt.Printf("List %d, source %s:\n",i, p.source)
+    	if p.port != "443" {
+    		fmt.Printf("\tname: %s:%s\n", p.name, p.port)
+    	} else {
+    		fmt.Printf("\tname: %s\n", p.name)
+    	}
+    	fmt.Printf("\tList: %s\n",
                    base64.StdEncoding.EncodeToString(p.list))
-	    for j,d := range p.details {
-			fmt.Printf("\t\tSingleton %d\n", j)
-			fmt.Printf("\t\tVersion: %s, config_id: %s, checked: %t\n",
-					   d.version, d.config_id, d.works)
-		    fmt.Printf("\t\tpublic_name: %s\n", d.public_name)
-			fmt.Printf("\t\tHPKE suites: %s\n", print_suites(d))
-			fmt.Printf("\t\tSingleton: %s\n",
-					   base64.StdEncoding.EncodeToString(d.singleton))
-		}
-	}
+        for j,d := range p.details {
+    		fmt.Printf("\t\tSingleton %d\n", j)
+    		fmt.Printf("\t\tVersion: %s, config_id: %s, checked: %t\n",
+    				   d.version, d.config_id, d.works)
+    	    fmt.Printf("\t\tpublic_name: %s\n", d.public_name)
+    		fmt.Printf("\t\tHPKE suites: %s\n", print_suites(d))
+    		fmt.Printf("\t\tSingleton: %s\n",
+    				   base64.StdEncoding.EncodeToString(d.singleton))
+    	}
+    }
+}
+
+func print_nsupdate(pile []ECHConfigListDets, source string) {
+    // print nsupdate commands for pile/source
 }
 
 func main() {
     var targetName string
     var targetPort string
     var retry_configs []byte
+    var outputtype string
+    var outputsource string
     public_name := ""
 
     // command line args
@@ -471,6 +519,8 @@ func main() {
     flag.StringVar(&public_name, "pn", "", "ECH public name")
     flag.StringVar(&doh_url, "doh", "https://cloudflare-dns.com/dns-query",
                     "DoH URL")
+    flag.StringVar(&outputtype, "o", "summary", "Output type desired")
+    flag.StringVar(&outputsource, "s", "all", "Source for output desired")
     flag.BoolVar(&verbose, "v", false, "verbosity")
     flag.BoolVar(&super_verbose, "vv", false, "verbosity")
     flag.Parse()
@@ -481,9 +531,6 @@ func main() {
 
     // check if we have an origin-svcb
     origin_svcb, err := get_origin_svcb(targetName, targetPort)
-    if super_verbose && err == nil {
-        fmt.Printf("origin svcb: %s\n", string(origin_svcb))
-    }
     // extract ECH from that
     if err == nil {
         var os_j map[string]any
@@ -492,57 +539,45 @@ func main() {
                 log.Printf("origin_svcb unmarshal fail: %v\n", err)
             }
         } else {
-            //fmt.Println("osj:", os_j)
-            //fmt.Printf("type osj: %T\n", os_j)
-            //fmt.Println(os_j["regeninterval"])
-            eps := os_j["endpoints"]
-            //fmt.Println("eps:", eps)
-            parr := eps.([]any)
-            //fmt.Printf("type eps: %T\n", eps)
-            for _, val := range parr {
-                d0 := (val).(map[string]any)
-                //p1 := d0["priority"]
-                //fmt.Println("priority:", p1)
-                p0 := d0["params"].(map[string]any)
-                //fmt.Println("params:", p0)
-                //fmt.Printf("type p0: %T\n", p0)
-                e0 := p0["ech"].(string)
-                //fmt.Println(e0)
-                ec, err := base64.StdEncoding.DecodeString(e0)
-                if err != nil {
-                    fmt.Printf("error parsing origin-svcb: %v\n", err)
-                }
-				if verbose && err == nil {
-					fmt.Printf("ECHConfigList value from origin_svcb %s\n", ec)
-				}
-                if add_to_pile(targetName, targetPort,
-                               "origin-svcb", origin_svcb, ec) != nil {
-                    fmt.Printf("add_to_pile error for origin-svcb: %v\n", err)
-                }
+    		if os_j["endpoints"] != nil {
+    			eps := os_j["endpoints"]
+    			parr := eps.([]any)
+    			for _, val := range parr {
+    				d0 := (val).(map[string]any)
+    				if d0["params"] == nil {
+    					continue
+    				}
+    				p0 := d0["params"].(map[string]any)
+    				if p0["ech"] == nil {
+    					continue
+    				}
+    				e0 := p0["ech"].(string)
+    				ec, err := base64.StdEncoding.DecodeString(e0)
+    				if err != nil {
+    					fmt.Printf("error parsing origin-svcb: %v\n", err)
+    				}
+    				if verbose && err == nil {
+    					fmt.Printf("ECHConfigList value from origin_svcb %s\n", e0)
+    				}
+    				if add_to_pile(targetName, targetPort,
+    							   "origin-svcb", origin_svcb, ec) != nil {
+    					fmt.Printf("add_to_pile error for origin-svcb: %v\n", err)
+    				}
+    			}
             }
         }
     }
 
-    // try get public_name if not provided on command line
-    if public_name == "" {
-        public_name, err = get_public_name_conn(targetName, targetPort)
-        if verbose && err == nil {
-            fmt.Printf("public name from conn: %s\n", public_name)
-        }
+    // check if we get some retry-configs
+    retry_configs, err = get_retry_configs(targetName, targetPort,
+    						   			   public_name)
+    if verbose && err == nil {
+    	fmt.Printf("ECHConfigList value from retry-configs %s\n",
+    		base64.StdEncoding.EncodeToString(retry_configs))
     }
-
-    // check if we get some retry-configs, if we have a public name
-    if public_name != "" {
-        retry_configs, err = get_retry_configs(targetName, targetPort,
-                                                     public_name)
-        if verbose && err == nil {
-            fmt.Printf("ECHConfigList value from retry-configs %s\n",
-                base64.StdEncoding.EncodeToString(retry_configs))
-        }
-        if add_to_pile(targetName, targetPort,
-                       "retry-configs", nil, retry_configs) != nil {
-            log.Fatalf("add_to_pile error for retry-configs: %v\n", err)
-        }
+    if retry_configs != nil && add_to_pile(targetName, targetPort,
+    			   "retry-configs", nil, retry_configs) != nil {
+    	log.Fatalf("add_to_pile error for retry-configs: %v\n", err)
     }
 
     // check for HTTPS RRs
@@ -593,33 +628,14 @@ func main() {
         }
     }
 
-	verify_thepile()
-	print_pile(thepile)
-    //fmt.Println(thepile)
+    // for each singleton, check if it works
+    verify_thepile()
 
-    // TODO: apply heuristics to produce inferred HTTPS RR desiderata
-    // principle: try just replace ECHConfig values and leave all else the same
-    // whenever change is needed
-
-	/*
-    desiredECH := retry_configs
-    // verify if desiderata function
-    var count int
-    var goodones []byte
-    if count, goodones, err = verify_configs(targetName, targetPort,
-                                             desiredECH); err != nil {
-        log.Fatalf("desiredECH fail %s:%s %v", targetName, targetPort,
-                        desiredECH, err)
+	// produce some output
+    if outputtype == "summary" {
+    	print_pile(thepile, outputsource)
     }
-    if verbose {
-        fmt.Printf("goodones %d: %s\n", count,
-            base64.StdEncoding.EncodeToString(goodones))
+    if outputtype == "nsupdate" {
+    	print_nsupdate(thepile, outputsource)
     }
-	*/
-
-    // TODO: verify if desiderata differ from status quo
-    // status quo
-
-    // TODO: if status quo != desiderata output suggested nsupdate or
-    // pdns_util stanzas or HTTPS RR values
 }
