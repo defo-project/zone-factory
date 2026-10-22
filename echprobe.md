@@ -32,7 +32,7 @@ order).
 TODO: build this into the program, when it's done...
 
 If you're using this tool, you probably already know what Encrypted Client
-Hello (ECH)[https://datatracker.ietf.org/doc/rfc9849/] is and are interested in
+Hello [ECH](https://datatracker.ietf.org/doc/rfc9849/) is and are interested in
 deploying that for some web server, or want to check what's deployed. There is
 a challnege in doing so, namely that the web server is where the ECH private
 keys reside, but we'd like the ECH public keys to be published in the DNS, so
