@@ -26,7 +26,7 @@ PowerDNS)
 
 ## Implementation
 
-[echprobe.go](./echprobe.go) script does the above (though in a different
+The [echprobe.go](./echprobe.go) script does the above (though in a different
 order).
 
 ## Extended Usage text 
