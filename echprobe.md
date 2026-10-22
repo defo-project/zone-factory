@@ -18,9 +18,11 @@ singletons):
 
 3) Output the set of ECHConfigList values we see using (1) and (2)
 
-4) Output the nsupdate commands we'd use to get (d) in the DNS
+4) Output the nsupdate commands we'd use to get (d) in the DNS (if you're using
+bind)
 
-5) Output the pdnsutil commands we'd use to get (d) in the DNS
+5) Output the pdnsutil commands we'd use to get (d) in the DNS (if you're using
+PowerDNS)
 
 ## Implementation
 
