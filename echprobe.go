@@ -595,7 +595,7 @@ func main() {
     flag.StringVar(&outputgrouping, "g", "as-found",
                    "Group ECHConfig values 'as-found', or 'one-by-one'")
     flag.BoolVar(&verbose, "v", false, "verbosity")
-    flag.BoolVar(&super_verbose, "vv", false, "verbosity")
+    flag.BoolVar(&super_verbose, "vv", false, "lots of verbosity")
     flag.Parse()
 
     if super_verbose {
