@@ -1,4 +1,4 @@
-# Some ideas for an ECH probe
+# The ECH probe tool...
 
 This describes a command line tool to help a zone factory publish
 ECH configs.
