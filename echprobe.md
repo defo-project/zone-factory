@@ -41,10 +41,10 @@ TODO: build this into the program, when it's done...
 If you're using this tool, you probably already know what Encrypted Client
 Hello ([ECH](https://datatracker.ietf.org/doc/rfc9849/)) is and are interested
 in deploying that for some web server, or want to check what's deployed. There
-is a challnege in doing so, namely that the web server is where the ECH private
+is a challenge in doing so, namely that the web server is where the ECH private
 keys reside, but we'd usually like the ECH public keys to be published in the
 DNS, so that browsers can make use of ECH.  This tool aims to help web and DNS
-adminstrators bridge that gap to make it easier to see how ECH is configured on
+administrators bridge that gap to make it easier to see how ECH is configured on
 a web server and how to publish usable values in the DNS so that browsers will
 use ECH.
 
@@ -52,7 +52,7 @@ use ECH.
 for ECH support at the web server there, and outputs descriptions of that state
 that aim to help administrators get the right values published in the DNS. 
 
-The data required to enable use of ECH at a web server includes cryptograhpic
+The data required to enable use of ECH at a web server includes cryptographic
 key(s) and other meta-data (algorithm details etc.) that are usually packaged
 in an `ECHConfig`. As more than one set of options may be supported at a given
 web server, lists of those values are what is typically distributed to clients
@@ -311,7 +311,7 @@ You can also ask for the output to be formatted so as to produce command
 snippets that can be used to update an authoritative DNS server via the
 `-o` option. The values can be `-o summary` (the default), or `-o nsupdate`
 to produce stanzas usable with bind's nsupdate command, or `-o pdns` to
-producs stanza usable with the PowerDNS `pdns-util` command. For example,
+produce stanzas usable with the PowerDNS `pdns-util` command. For example,
 
 ```bash
 $ ./echprobe -s retry-configs -o nsupdate
@@ -349,7 +349,7 @@ That last example shows up some of the limits of `echprobe` - if one
 wanted to publish HTTPS RRs with those values, then it seems likely
 one might want to use different priorities (all "1" in the above) and
 perhaps a different TTL setting. So the DNS tool stanzas are likely
-to need editing before being used to udpate an actual authoritative
+to need editing before being used to update an actual authoritative
 DNS server.
 
 
