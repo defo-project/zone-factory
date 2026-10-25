@@ -154,15 +154,19 @@ func parse_cfg_list(cfg []byte) ([]ECHConfigDets, error) {
         if (suiteoff + 2) >= tlen {
             return nil, errors.New("ECHConfigList too short (2)")
         }
-        suitelen := int(thiscfg[suiteoff])*256+int(thiscfg[suiteoff+1])
+        suitelen := int(thiscfg[suiteoff]) * 256 + int(thiscfg[suiteoff+1])
         // there better be one suite, at least
-        det.kdf = fmt.Sprintf("0x%04x", int(thiscfg[suiteoff+2]))
-        det.aead = fmt.Sprintf("0x%04x", int(thiscfg[suiteoff+3]))
+        kdf := int(thiscfg[suiteoff + 2]) * 256 + int(thiscfg[suiteoff+3])
+        det.kdf = fmt.Sprintf("0x%04x", kdf)
+        aead := int(thiscfg[suiteoff + 4]) * 256 + int(thiscfg[suiteoff+5])
+        det.aead = fmt.Sprintf("0x%04x", aead)
         for suitenum := 1; suitenum < suitelen/4; suitenum++ {
-            det.kdf += fmt.Sprintf(",0x%04x",
-                                   int(thiscfg[suiteoff+2+4*suitenum]))
-            det.aead += fmt.Sprintf(",0x%04x",
-                                    int(thiscfg[suiteoff+3+4*suitenum]))
+            kdf := int(thiscfg[suiteoff+2+suitenum*4]) * 256 +
+                   int(thiscfg[suiteoff+3+suitenum*4])
+            det.kdf += fmt.Sprintf(",0x%04x", kdf)
+            aead := int(thiscfg[suiteoff+4+suitenum*4]) * 256 +
+                    int(thiscfg[suiteoff+5+suitenum*4])
+            det.aead += fmt.Sprintf(",0x%04x", aead)
         }
         pnoff := suiteoff + 2 + suitelen + 1
         if pnoff >= tlen {
@@ -441,9 +445,64 @@ func add_to_pile(host string, port string, source string, original any,
     return nil
 }
 
+// IANA registries for this are at https://www.iana.org/assignments/hpke
+// this code was sync'd with that on 2026-10-25
+// Given that almost nobody publishes ECHConfig values with >1 kdf or aead
+// suite, we'll take the simple approach and only print 'nice' strings for
+// cases with just one suite. If someone uses >1 then we'll just see the
+// comma-sep hex values.
+var aead_map = map[string]string {
+    "0x0000": "Reserved", 
+    "0x0001": "AES-128-GCM", 
+    "0x0002": "AES-256-GCM", 
+    "0x0003": "ChaCha20Poly1305", 
+    "0xffff": "Export-only",
+}
+
+var kdf_map = map[string]string {
+    "0x0001": "HKDF-SHA256",
+    "0x0002": "HKDF-SHA384",
+    "0x0003": "HKDF-SHA512",
+    "0x0010": "SHAKE128",
+    "0x0011": "SHAKE256",
+    "0x0012": "TurboSHAKE128",
+    "0x0013": "TurboSHAKE256",
+}
+
+var kem_map = map[string]string {
+    "0x0010": "DHKEM(P-256, HKDF-SHA256)",
+    "0x0011": "DHKEM(P-384, HKDF-SHA384)",
+    "0x0012": "DHKEM(P-521, HKDF-SHA512)",
+    "0x0013": "DHKEM(CP-256, HKDF-SHA256)",
+    "0x0014": "DHKEM(CP-384, HKDF-SHA384)",
+    "0x0015": "DHKEM(CP-521, HKDF-SHA512)",
+    "0x0016": "DHKEM(secp256k1, HKDF-SHA256)",
+    "0x0020": "DHKEM(X25519, HKDF-SHA256)",
+    "0x0021": "DHKEM(X448, HKDF-SHA512)",
+    "0x0022": "DHKEM(X25519+Elligator, HKDF-SHA256)",
+    "0x0030": "X25519Kyber768Draft00",
+    "0x0040": "ML-KEM-512",
+    "0x0041": "ML-KEM-768",
+    "0x0042": "ML-KEM-1024",
+    "0x0050": "MLKEM768-P256",
+    "0x0051": "MLKEM1024-P384",
+    "0x647a": "X-Wing",
+}
+
 func print_suites(d ECHConfigDets) (string) {
-    // make this nicer later via names for codepoints
-    rv := fmt.Sprintf("%s/%s/%s", d.kem, d.kdf, d.aead)
+    aead, ok := aead_map[d.aead]
+    if !ok {
+        aead = d.aead
+    }
+    kdf, ok := kdf_map[d.kdf]
+    if !ok {
+        kdf = d.kdf
+    }
+    kem, ok := kem_map[d.kem]
+    if !ok {
+        kem = d.kem
+    }
+    rv := fmt.Sprintf("%s/%s/%s", kem, kdf, aead)
     return rv
 }
 
