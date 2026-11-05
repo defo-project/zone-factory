@@ -36,6 +36,20 @@ import (
     "net/url"
     "slices"
     "strings"
+
+    // apparently "golang.org/x/net/internal/http3" is closer
+    // to "official" but that doesn't seem to work for me, so
+    // we'll go with...
+    "github.com/quic-go/quic-go"
+    "github.com/quic-go/quic-go/http3"
+	// that needed an install for me:
+	//     $ go install github.com/quic-go/quic-go/http3@latest
+	// which picked up some dependencies too
+	// I also needed a go.mod file which I created via:
+	//     $  go mod init defo.ie/echprobe
+	//     $  go mod tidy
+	// I forget in which order those install/go.mod commands
+	// were done, sorry;-)
 )
 
 type ECHConfigDets struct {
@@ -76,6 +90,36 @@ func get_target_url(host string, port string) (string) {
     return url
 }
 
+func my_kinda_client(echcfg []byte, doh3 bool)(*http.Client) {
+    var client *http.Client
+    if doh3 {
+        tr := &http3.Transport{
+            // set a TLS client config, if desired
+            TLSClientConfig: &tls.Config{
+                MinVersion: tls.VersionTLS13,
+                EncryptedClientHelloConfigList: echcfg,
+                NextProtos: []string{http3.NextProtoH3}, // set the ALPN for HTTP/3
+            },
+            QUICConfig:      &quic.Config{}, // QUIC connection options
+        }
+        defer tr.Close()
+        client = &http.Client{
+            Transport: tr,
+        }
+    } else {
+        tlsConfig := &tls.Config{
+            MinVersion: tls.VersionTLS13,
+            EncryptedClientHelloConfigList: echcfg,
+        }
+        client = &http.Client{
+            Transport: &http.Transport{
+                TLSClientConfig: tlsConfig,
+               },
+        }
+    }
+    return client
+}
+
 func get_origin_svcb(host string, port string) ([]byte, error) {
     targetURL := get_target_url(host, port)
     url, err := url.Parse(targetURL)
@@ -85,7 +129,7 @@ func get_origin_svcb(host string, port string) ([]byte, error) {
         }
         return nil, err
     }
-    client := &http.Client{}
+    client := my_kinda_client(nil, false)
     resp, err := client.Do(&http.Request{
         Method: "GET",
         Header: map[string][]string{
@@ -220,14 +264,7 @@ func get_public_name_conn(host string, port string) (string, error) {
     // the public name in the above config
     suffix := ", not public.test.defs.ie"
 
-    tlsConfig := &tls.Config{
-        EncryptedClientHelloConfigList: fakeECH,
-    }
-    httpClient := &http.Client{
-        Transport: &http.Transport{
-            TLSClientConfig: tlsConfig,
-        },
-    }
+    httpClient := my_kinda_client(fakeECH, false)
     if _, err := httpClient.Get(targetURL); err != nil {
         var certErr *tls.CertificateVerificationError
         if errors.As(err, &certErr) {
@@ -310,14 +347,7 @@ func get_retry_configs(host string, port string,
             base64.StdEncoding.EncodeToString(fakeECH_good_pn))
     }
 
-    tlsConfig := &tls.Config{
-        EncryptedClientHelloConfigList: fakeECH_good_pn,
-    }
-    httpClient := &http.Client{
-        Transport: &http.Transport{
-            TLSClientConfig: tlsConfig,
-        },
-    }
+    httpClient := my_kinda_client(fakeECH_good_pn, false)
     targetURL := get_target_url(host, port)
     if _, err := httpClient.Get(targetURL); err != nil {
         var echErr *tls.ECHRejectionError
@@ -393,15 +423,7 @@ func verify_configs(host string, port string,
             fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
                         olen, offset, thislen)
         }
-        // try that ECHConfig singleton
-        tlsConfig := &tls.Config{
-            EncryptedClientHelloConfigList: thiscfg,
-        }
-        httpClient := &http.Client{
-            Transport: &http.Transport{
-                TLSClientConfig: tlsConfig,
-            },
-        }
+        httpClient := my_kinda_client(thiscfg, false)
         targetURL := get_target_url(host, port)
         if _, nerr := httpClient.Get(targetURL); nerr != nil {
             if super_verbose {
@@ -592,7 +614,7 @@ func print_dns_instrs(pile []ECHConfigListDets, otype string,
                       source string, grouping string) {
     // print dns update commands as directed
     // TODO: extract/guess ttl/priority/targ-name from elsewhere
-    // TODO: consider other HTRPS RR content (ipv4hint etc.)
+    // TODO: consider other HTTPS RR content (ipv4hint etc.)
     ttl := 3600
     priority := 1
     targetname := "."
