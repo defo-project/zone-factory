@@ -352,5 +352,11 @@ perhaps a different TTL setting. So the DNS tool stanzas are likely
 to need editing before being used to update an actual authoritative
 DNS server.
 
+## Current Status
 
+As of now (2026-11-11) I'm in the middle of intergating h3/QUIC as
+a transport for the tool, but that's not done, so YMMV if you try
+use this right now. (Servers that don't support QUIC hit timeouts,
+those that do, hit decode errors if they have a WKECH JSON file,
+but it'll get better:-)
 

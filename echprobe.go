@@ -42,14 +42,14 @@ import (
     // we'll go with...
     "github.com/quic-go/quic-go"
     "github.com/quic-go/quic-go/http3"
-	// that needed an install for me:
-	//     $ go install github.com/quic-go/quic-go/http3@latest
-	// which picked up some dependencies too
-	// I also needed a go.mod file which I created via:
-	//     $  go mod init defo.ie/echprobe
-	//     $  go mod tidy
-	// I forget in which order those install/go.mod commands
-	// were done, sorry;-)
+    // that needed an install for me:
+    //     $ go install github.com/quic-go/quic-go/http3@latest
+    // which picked up some dependencies too
+    // I also needed a go.mod file which I created via:
+    //     $  go mod init defo.ie/echprobe
+    //     $  go mod tidy
+    // I forget in which order those install/go.mod commands
+    // were done, sorry;-)
 )
 
 type ECHConfigDets struct {
@@ -90,53 +90,67 @@ func get_target_url(host string, port string) (string) {
     return url
 }
 
-func my_kinda_client(echcfg []byte, doh3 bool)(*http.Client) {
-    var client *http.Client
-    if doh3 {
-        tr := &http3.Transport{
-            // set a TLS client config, if desired
-            TLSClientConfig: &tls.Config{
-                MinVersion: tls.VersionTLS13,
-                EncryptedClientHelloConfigList: echcfg,
-                NextProtos: []string{http3.NextProtoH3}, // set the ALPN for HTTP/3
-            },
-            QUICConfig:      &quic.Config{}, // QUIC connection options
-        }
-        defer tr.Close()
-        client = &http.Client{
-            Transport: tr,
-        }
-    } else {
-        tlsConfig := &tls.Config{
-            MinVersion: tls.VersionTLS13,
-            EncryptedClientHelloConfigList: echcfg,
-        }
-        client = &http.Client{
-            Transport: &http.Transport{
-                TLSClientConfig: tlsConfig,
-               },
-        }
-    }
-    return client
-}
-
-func get_origin_svcb(host string, port string) ([]byte, error) {
-    targetURL := get_target_url(host, port)
-    url, err := url.Parse(targetURL)
+func my_quic_then_tcp(echcfg []byte, the_url string) (*http.Response, error) {
+	targetURL, err := url.Parse(the_url)
     if err != nil {
         if super_verbose {
-            fmt.Printf("url.Parse failed for %s: %v", targetURL, err)
+            fmt.Printf("url.Parse failed for %s: %v\n", the_url, err)
         }
         return nil, err
     }
-    client := my_kinda_client(nil, false)
-    resp, err := client.Do(&http.Request{
+    // try quic
+    tr := &http3.Transport{
+    	TLSClientConfig: &tls.Config{
+    		EncryptedClientHelloConfigList: echcfg,
+    		NextProtos: []string{http3.NextProtoH3}, // set the ALPN for HTTP/3
+    	},
+    	QUICConfig:      &quic.Config{}, // QUIC connection options
+    }
+    defer tr.Close()
+	client := &http.Client{
+    	Transport: tr,
+    }
+	var resp *http.Response
+	var herr error
+    resp, herr = client.Do(&http.Request{
         Method: "GET",
         Header: map[string][]string{
             "Accept": {"application/json"},
         },
-        URL: url,
+        URL: targetURL,
     })
+    // try tls/tcp
+    if herr != nil {
+		tr.Close()
+        if super_verbose {
+            fmt.Printf("h3 request failed for %s: %v\n", the_url, herr)
+        }
+		ttr := &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS13,
+				EncryptedClientHelloConfigList: echcfg,
+			},
+		}
+        client = &http.Client{
+			Transport: ttr,
+        }
+    	resp, herr = client.Do(&http.Request{
+    		Method: "GET",
+    		Header: map[string][]string{
+    			"Accept": {"application/json"},
+    		},
+    		URL: targetURL,
+    	})
+        if herr != nil && super_verbose {
+            fmt.Printf("http/tls/tcp failed for %s: %v\n", the_url, herr)
+        }
+    }
+    return resp, herr
+}
+
+func get_origin_svcb(host string, port string) ([]byte, error) {
+    targetURL := get_target_url(host, port)
+    resp, err := my_quic_then_tcp(nil, targetURL)
     if err != nil {
         if super_verbose {
             fmt.Printf("failed to perform request %s: %v", targetURL, err)
@@ -264,8 +278,7 @@ func get_public_name_conn(host string, port string) (string, error) {
     // the public name in the above config
     suffix := ", not public.test.defs.ie"
 
-    httpClient := my_kinda_client(fakeECH, false)
-    if _, err := httpClient.Get(targetURL); err != nil {
+    if _, err := my_quic_then_tcp(fakeECH, targetURL); err != nil {
         var certErr *tls.CertificateVerificationError
         if errors.As(err, &certErr) {
             serr := certErr.Error()
@@ -347,9 +360,9 @@ func get_retry_configs(host string, port string,
             base64.StdEncoding.EncodeToString(fakeECH_good_pn))
     }
 
-    httpClient := my_kinda_client(fakeECH_good_pn, false)
     targetURL := get_target_url(host, port)
-    if _, err := httpClient.Get(targetURL); err != nil {
+	_, err := my_quic_then_tcp(fakeECH_good_pn, targetURL)
+    if err != nil {
         var echErr *tls.ECHRejectionError
         if errors.As(err, &echErr) && len(echErr.RetryConfigList) > 0 {
             return echErr.RetryConfigList, nil
@@ -423,9 +436,9 @@ func verify_configs(host string, port string,
             fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
                         olen, offset, thislen)
         }
-        httpClient := my_kinda_client(thiscfg, false)
         targetURL := get_target_url(host, port)
-        if _, nerr := httpClient.Get(targetURL); nerr != nil {
+		_, nerr := my_quic_then_tcp(thiscfg, targetURL)
+        if nerr != nil {
             if super_verbose {
                 fmt.Printf("Config %d failed: %s\n", count,
                     base64.StdEncoding.EncodeToString(thiscfg))
