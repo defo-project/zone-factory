@@ -34,22 +34,22 @@ import (
     "log"
     "net/http"
     "net/url"
+    "os"
     "slices"
     "strings"
+    "time"
 
     // apparently "golang.org/x/net/internal/http3" is closer
     // to "official" but that doesn't seem to work for me, so
-    // we'll go with...
+    // we'll go with that...
     "github.com/quic-go/quic-go"
     "github.com/quic-go/quic-go/http3"
-    // that needed an install for me:
+    // using those needed an install for me:
     //     $ go install github.com/quic-go/quic-go/http3@latest
-    // which picked up some dependencies too
+    // which picked up dependencies too
     // I also needed a go.mod file which I created via:
-    //     $  go mod init defo.ie/echprobe
-    //     $  go mod tidy
-    // I forget in which order those install/go.mod commands
-    // were done, sorry;-)
+    //     $ go mod init defo.ie/echprobe
+    //     $ go mod tidy
 )
 
 type ECHConfigDets struct {
@@ -75,6 +75,7 @@ type ECHConfigListDets struct {
 }
 
 var verbose bool = false
+var duration time.Duration 
 var super_verbose bool = false
 var doh_url string = ""
 var thepile []ECHConfigListDets
@@ -91,7 +92,7 @@ func get_target_url(host string, port string) (string) {
 }
 
 func my_quic_then_tcp(echcfg []byte, the_url string) (*http.Response, error) {
-	targetURL, err := url.Parse(the_url)
+    targetURL, err := url.Parse(the_url)
     if err != nil {
         if super_verbose {
             fmt.Printf("url.Parse failed for %s: %v\n", the_url, err)
@@ -99,53 +100,56 @@ func my_quic_then_tcp(echcfg []byte, the_url string) (*http.Response, error) {
         return nil, err
     }
     // try quic
-    tr := &http3.Transport{
-    	TLSClientConfig: &tls.Config{
-    		EncryptedClientHelloConfigList: echcfg,
-    		NextProtos: []string{http3.NextProtoH3}, // set the ALPN for HTTP/3
-    	},
-    	QUICConfig:      &quic.Config{}, // QUIC connection options
+    h3tr := &http3.Transport{
+        TLSClientConfig: &tls.Config{
+            EncryptedClientHelloConfigList: echcfg,
+            NextProtos: []string{http3.NextProtoH3}, // set the ALPN for HTTP/3
+        },
+        QUICConfig:      &quic.Config{}, // QUIC connection options
     }
-    defer tr.Close()
-	client := &http.Client{
-    	Transport: tr,
+    defer h3tr.Close()
+    h3client := &http.Client{
+        Timeout: duration,
+        Transport: h3tr,
     }
-	var resp *http.Response
-	var herr error
-    resp, herr = client.Do(&http.Request{
+    h3resp, h3err := h3client.Do(&http.Request{
         Method: "GET",
         Header: map[string][]string{
             "Accept": {"application/json"},
         },
         URL: targetURL,
     })
-    // try tls/tcp
-    if herr != nil {
-		tr.Close()
+    if h3err == nil && h3resp.StatusCode == 200 {
         if super_verbose {
-            fmt.Printf("h3 request failed for %s: %v\n", the_url, herr)
+            fmt.Printf("h3 request worked for %s: %s\n", the_url, h3resp.Proto)
         }
-		ttr := &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS13,
-				EncryptedClientHelloConfigList: echcfg,
-			},
-		}
-        client = &http.Client{
-			Transport: ttr,
-        }
-    	resp, herr = client.Do(&http.Request{
-    		Method: "GET",
-    		Header: map[string][]string{
-    			"Accept": {"application/json"},
-    		},
-    		URL: targetURL,
-    	})
-        if herr != nil && super_verbose {
-            fmt.Printf("http/tls/tcp failed for %s: %v\n", the_url, herr)
-        }
+        return h3resp, h3err
     }
-    return resp, herr
+
+    // try tls/tcp
+    if super_verbose {
+        fmt.Printf("h3 request failed for %s: %v\n", the_url, h3err)
+    }
+    ttr := &http.Transport{
+        TLSClientConfig: &tls.Config{
+            MinVersion: tls.VersionTLS13,
+            EncryptedClientHelloConfigList: echcfg,
+        },
+    }
+    tclient := &http.Client{
+        Transport: ttr,
+    }
+    tresp, terr := tclient.Do(&http.Request{
+        Method: "GET",
+        Header: map[string][]string{
+            "Accept": {"application/json"},
+        },
+        URL: targetURL,
+    })
+    if terr != nil && super_verbose {
+        fmt.Printf("http/tls/tcp failed for %s: %v\n", the_url, terr)
+    }
+    return tresp, terr
 }
 
 func get_origin_svcb(host string, port string) ([]byte, error) {
@@ -166,7 +170,7 @@ func get_origin_svcb(host string, port string) ([]byte, error) {
     }
     bodyBytes, err := io.ReadAll(resp.Body)
     if err != nil {
-        log.Printf("failed to read response body: %v", err)
+        fmt.Printf("failed to read response body: %v", err)
         return nil, err
     }
     if super_verbose {
@@ -361,7 +365,7 @@ func get_retry_configs(host string, port string,
     }
 
     targetURL := get_target_url(host, port)
-	_, err := my_quic_then_tcp(fakeECH_good_pn, targetURL)
+    _, err := my_quic_then_tcp(fakeECH_good_pn, targetURL)
     if err != nil {
         var echErr *tls.ECHRejectionError
         if errors.As(err, &echErr) && len(echErr.RetryConfigList) > 0 {
@@ -397,7 +401,7 @@ func get_https_rrs(host string, port string) ([]byte, error) {
         },
         URL: url,
     })
-    if err != nil {
+    if resp.StatusCode != 200 || err != nil {
         return nil, err
     }
     defer resp.Body.Close()
@@ -437,7 +441,7 @@ func verify_configs(host string, port string,
                         olen, offset, thislen)
         }
         targetURL := get_target_url(host, port)
-		_, nerr := my_quic_then_tcp(thiscfg, targetURL)
+        _, nerr := my_quic_then_tcp(thiscfg, targetURL)
         if nerr != nil {
             if super_verbose {
                 fmt.Printf("Config %d failed: %s\n", count,
@@ -675,6 +679,7 @@ func main() {
     var outputtype string
     var outputsource string
     var outputgrouping string
+    var timeoutstr string
     public_name := ""
     total_checked_good = 0
 
@@ -690,10 +695,17 @@ func main() {
                    "Group ECHConfig values 'as-found', or 'one-by-one'")
     flag.BoolVar(&verbose, "v", false, "verbosity")
     flag.BoolVar(&super_verbose, "vv", false, "lots of verbosity")
+    flag.StringVar(&timeoutstr,"t","100ms","Timeout for connections in ms (default 100)")
     flag.Parse()
 
     if super_verbose {
         verbose = true
+    }
+    var derr error
+    duration, derr = time.ParseDuration(timeoutstr)
+    if derr != nil {
+        log.Fatalf("Badly formatted timeout: '%s' (default '100ms') %v\n", timeoutstr, derr)
+        os.Exit(1)
     }
 
     // check if we have an origin-svcb
@@ -703,7 +715,7 @@ func main() {
         var os_j map[string]any
         if err = json.Unmarshal(origin_svcb, &os_j); err != nil {
             if verbose {
-                log.Printf("origin_svcb unmarshal fail: %v\n", err)
+                fmt.Printf("origin_svcb unmarshal fail: %v\n", err)
             }
         } else {
             if os_j["endpoints"] != nil {
