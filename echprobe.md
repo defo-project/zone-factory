@@ -354,9 +354,11 @@ DNS server.
 
 ## Current Status
 
-As of now (2026-11-11) I'm in the middle of intergating h3/QUIC as
-a transport for the tool, but that's not done, so YMMV if you try
-use this right now. (Servers that don't support QUIC hit timeouts,
-those that do, hit decode errors if they have a WKECH JSON file,
-but it'll get better:-)
+As of now (2026-11-11), there are still some TODO's for this tool,
+including:
+    - make better use of `origin_svcb` content when emitting nsupdate/pdns
+      output, e.g. suggest TTL as half of regeninterval
+    - properly do happy eyeballs v3 based on content of HTTPS RRs
+      (well, to the extent possible/knowable;-)
+
 
