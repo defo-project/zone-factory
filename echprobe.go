@@ -53,7 +53,8 @@ import (
 )
 
 type ECHConfigDets struct {
-	works        bool
+	// This represents a singleton ECHConfigList
+	works        bool   // Set to TRUE when validated as working
 	version      string
 	config_id    string
 	max_name_len int
@@ -66,12 +67,13 @@ type ECHConfigDets struct {
 }
 
 type ECHConfigListDets struct {
+	// This represents a full ECHConfigList
 	name     string // what'd be in an inner SNI
 	port     string // service port (usually 443)
 	source   string // retry-config or origin-svcb or dns
 	original any    // original form in which we got this (e.g. DNS transaction)
 	list     []byte // the encoded ECHConfigList
-	details  []ECHConfigDets
+	details  []ECHConfigDets // the singletons
 }
 
 var verbose bool = false
