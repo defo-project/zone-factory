@@ -21,6 +21,19 @@
  * THE SOFTWARE.
  */
 
+// Given a DNS name, this script probes for Encrypted Client Hello (ECH, RFC9849)
+// configurations (public keys etc) in order to assist admins
+// in checking or fixing their setups. There are 3 possible 
+// sources for ECH configs: 1) in HTTPS RRs in the DNS, 2) via
+// ECH retry-configs and 3) via a .well-known URL.
+// The set of ECH configs found are then tested and listed in output.
+// The output optionally can be formatted so as to be suitable for use with
+// bind's nsupdate or PowerDNS's pdns-util
+
+// This code has something in common with happy-eyeballs v3, in that we want
+// to try the various options (e.g. h3) but we're not concerned here with
+// speed, so it's not quite the same.
+
 package main
 
 import (
@@ -52,6 +65,18 @@ import (
 	//     $ go mod tidy
 )
 
+type ECHOptionals struct {
+	// things that may optionally accompany an ECHConfigList
+	// there are more things one could add here later
+	regeninterval int // from orivin-svcb 
+	currentttl int // current-TTL in HTTP answer
+	priority int // from orivin-svcb or HTTPS
+	target string // target from origin-svcb or HTTPS
+	ipv4hints string  // from orivin-svcb or HTTPS
+	ipv6hints string  // from orivin-svcb or HTTPS
+	alpn string // from orivin-svcb or HTTPS
+}
+
 type ECHConfigDets struct {
 	// This represents a singleton ECHConfigList
 	works        bool   // Set to TRUE when validated as working
@@ -74,6 +99,7 @@ type ECHConfigListDets struct {
 	original any    // original form in which we got this (e.g. DNS transaction)
 	list     []byte // the encoded ECHConfigList
 	details  []ECHConfigDets // the singletons
+	optionals ECHOptionals
 }
 
 var verbose bool = false
@@ -466,7 +492,7 @@ func verify_configs(host string, port string,
 }
 
 func add_to_pile(host string, port string, source string, original any,
-	list []byte) error {
+	list []byte, optionals *ECHOptionals) error {
 	// we'll add another entry to the pile, it'll be verified later
 	// if desired
 	if super_verbose {
@@ -478,6 +504,9 @@ func add_to_pile(host string, port string, source string, original any,
 	entry.source = source
 	entry.list = list
 	entry.original = original
+	if optionals != nil {
+		entry.optionals = *optionals
+	}
 	var err error
 	entry.details, err = parse_cfg_list(list)
 	if err != nil {
@@ -590,6 +619,7 @@ func print_pile(pile []ECHConfigListDets, source string) {
 		}
 		fmt.Printf("\tList: %s\n",
 			base64.StdEncoding.EncodeToString(p.list))
+		fmt.Printf("\tOptionals: %v\n", p.optionals)
 		for j, d := range p.details {
 			fmt.Printf("\t\tSingleton %d\n", j)
 			fmt.Printf("\t\tVersion: %s, config_id: %s, checked: %t\n",
@@ -722,6 +752,12 @@ func main() {
 			}
 		} else {
 			if os_j["endpoints"] != nil {
+				var optionals ECHOptionals
+				var ok bool
+				optionals.regeninterval, ok = os_j["regeninterval"].(int)
+				if !ok {
+					optionals.regeninterval = 3600
+				}
 				eps := os_j["endpoints"]
 				parr := eps.([]any)
 				for _, val := range parr {
@@ -738,11 +774,28 @@ func main() {
 					if err != nil {
 						fmt.Printf("error parsing origin-svcb: %v\n", err)
 					}
+					// check for some optional things
+					optionals.priority, ok = d0["priority"].(int)
+					if !ok {
+						optionals.priority = 1
+					}
+					optionals.ipv4hints, ok = p0["ipv4hints"].(string)
+					if !ok {
+						optionals.ipv4hints = ""
+					}
+					optionals.ipv6hints, ok = p0["ipv6hints"].(string)
+					if !ok {
+						optionals.ipv6hints = ""
+					}
+					optionals.alpn, ok = p0["alpn"].(string)
+					if !ok {
+						optionals.alpn = ""
+					}
 					if verbose && err == nil {
 						fmt.Printf("ECHConfigList value from origin_svcb %s\n", e0)
 					}
 					if add_to_pile(targetName, targetPort,
-						"origin-svcb", origin_svcb, ec) != nil {
+						"origin-svcb", origin_svcb, ec, &optionals) != nil {
 						fmt.Printf("add_to_pile error for origin-svcb: %v\n", err)
 					}
 				}
@@ -758,7 +811,7 @@ func main() {
 			base64.StdEncoding.EncodeToString(retry_configs))
 	}
 	if retry_configs != nil && add_to_pile(targetName, targetPort,
-		"retry-configs", nil, retry_configs) != nil {
+		"retry-configs", nil, retry_configs, nil) != nil {
 		log.Fatalf("add_to_pile error for retry-configs: %v\n", err)
 	}
 
@@ -771,6 +824,8 @@ func main() {
 	}
 	// unmarshall and pull out ech= strings
 	var https_rrs_json map[string]any
+	var optionals ECHOptionals
+	var ok bool
 	if err = json.Unmarshal(https_rrs, &https_rrs_json); err != nil {
 		if super_verbose {
 			fmt.Printf("unmarshal fail: %v\n", err)
@@ -778,6 +833,7 @@ func main() {
 	}
 	var dns_configs [][]byte
 	dns_ans := https_rrs_json["Answer"]
+
 	if super_verbose {
 		fmt.Println("DNS Ans:\n", dns_ans)
 	}
@@ -793,9 +849,17 @@ func main() {
 	for _, val := range ansarr {
 		d0 := (val).(map[string]any)
 		if d0["type"].(float64) == 65 {
+			var tmp_ttl float64
+			tmp_ttl, ok = d0["TTL"].(float64)
+			if ok {
+				optionals.currentttl = int(tmp_ttl)
+			} else {
+				optionals.currentttl = 0
+			}
 			rrval := d0["data"].(string)
 			fvals := strings.Fields(rrval)
 			for _, v := range fvals {
+				// TODO: parse out priority, target, others
 				place := strings.LastIndex(v, "ech=")
 				if place != -1 {
 					if verbose {
@@ -811,7 +875,7 @@ func main() {
 	}
 	for _, d := range dns_configs {
 		if add_to_pile(targetName, targetPort,
-			"dns", https_rrs_json, d) != nil {
+			"dns", https_rrs_json, d, &optionals) != nil {
 			log.Fatalf("add_to_pile error for retry-configs: %v\n", err)
 		}
 	}
