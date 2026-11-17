@@ -21,8 +21,8 @@
  * THE SOFTWARE.
  */
 
-// Given a DNS name, this script probes for Encrypted Client Hello (ECH, RFC9849)
-// configurations (public keys etc) in order to assist admins
+// Given a DNS name, this script probes for Encrypted Client Hello (ECH,
+// RFC9849) configurations (public keys etc) in order to assist admins
 // in checking or fixing their setups. There are 3 possible 
 // sources for ECH configs: 1) in HTTPS RRs in the DNS, 2) via
 // ECH retry-configs and 3) via a .well-known URL.
@@ -49,6 +49,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,9 +73,11 @@ type ECHOptionals struct {
 	currentttl int // current-TTL in HTTP answer
 	priority int // from orivin-svcb or HTTPS
 	target string // target from origin-svcb or HTTPS
-	ipv4hints string  // from orivin-svcb or HTTPS
-	ipv6hints string  // from orivin-svcb or HTTPS
+	ipv4hint string  // from orivin-svcb or HTTPS
+	ipv6hint string  // from orivin-svcb or HTTPS
 	alpn string // from orivin-svcb or HTTPS
+	mandatory string // mandatory svcparamkeys
+	no_default_alpn bool // that one:-)
 }
 
 type ECHConfigDets struct {
@@ -119,8 +122,8 @@ func get_target_url(host string, port string) string {
 	return url
 }
 
-// Try access URL via QUIC, then, if needed, TLS/TCP, return bytes found or error
-// TODO: do more of happy eyeballs v3...
+// Try URL via QUIC, then, if needed, TLS/TCP, return bytes found or error
+// TODO: do more happy eyeballs v3 like stuff...
 func my_quic_then_tcp(echcfg []byte, the_url string) (*http.Response, error) {
 	targetURL, err := url.Parse(the_url)
 	if err != nil {
@@ -133,7 +136,7 @@ func my_quic_then_tcp(echcfg []byte, the_url string) (*http.Response, error) {
 	h3tr := &http3.Transport{
 		TLSClientConfig: &tls.Config{
 			EncryptedClientHelloConfigList: echcfg,
-			NextProtos:                     []string{http3.NextProtoH3}, // set the ALPN for HTTP/3
+			NextProtos: []string{http3.NextProtoH3}, // set the ALPN for HTTP/3
 		},
 		QUICConfig: &quic.Config{}, // QUIC connection options
 	}
@@ -233,8 +236,8 @@ func parse_cfg_list(cfg []byte) ([]ECHConfigDets, error) {
 		if super_verbose {
 			fmt.Printf("Config %d: %s\n", count,
 				base64.StdEncoding.EncodeToString(thiscfg))
-			fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
-				olen, offset, thislen)
+			//fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
+				//olen, offset, thislen)
 		}
 
 		tlen := len(thiscfg)
@@ -272,13 +275,13 @@ func parse_cfg_list(cfg []byte) ([]ECHConfigDets, error) {
 			return nil, errors.New("ECHConfigList too short (4)")
 		}
 		pns := thiscfg[pnoff+1 : pnoff+1+pnlen]
-		if super_verbose {
-			fmt.Printf("tlen: %d, publen: %d, suiteoff: %d\n",
-				tlen, publen, suiteoff)
-			fmt.Printf("suitelen: %d, pnoff: %d, pnlen: %d\n",
-				suitelen, pnoff, pnlen)
-			fmt.Println(pns)
-		}
+		////if super_verbose {
+			//fmt.Printf("tlen: %d, publen: %d, suiteoff: %d\n",
+				//tlen, publen, suiteoff)
+			//fmt.Printf("suitelen: %d, pnoff: %d, pnlen: %d\n",
+				//suitelen, pnoff, pnlen)
+			//fmt.Println(pns)
+		//}
 		pn := string(pns)
 		det.public_name = pn
 		if (pnoff + 1 + pnlen + 2) > tlen {
@@ -294,6 +297,7 @@ func parse_cfg_list(cfg []byte) ([]ECHConfigDets, error) {
 		det.singleton = thiscfg
 		dets = append(dets, det)
 		offset += (thislen + 4)
+		count += 1
 	}
 	return dets, nil
 }
@@ -467,8 +471,8 @@ func verify_configs(host string, port string,
 		if super_verbose {
 			fmt.Printf("Config %d: %s\n", count,
 				base64.StdEncoding.EncodeToString(thiscfg))
-			fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
-				olen, offset, thislen)
+			//fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
+				//olen, offset, thislen)
 		}
 		targetURL := get_target_url(host, port)
 		_, nerr := my_quic_then_tcp(thiscfg, targetURL)
@@ -619,6 +623,7 @@ func print_pile(pile []ECHConfigListDets, source string) {
 		}
 		fmt.Printf("\tList: %s\n",
 			base64.StdEncoding.EncodeToString(p.list))
+		// TODO: nice printing of optionals
 		fmt.Printf("\tOptionals: %v\n", p.optionals)
 		for j, d := range p.details {
 			fmt.Printf("\t\tSingleton %d\n", j)
@@ -660,11 +665,10 @@ func pdns_stanza(ownername string, ttl int, priority int,
 		base64.StdEncoding.EncodeToString(ecl))
 }
 
+// TODO: handle optionals
 func print_dns_instrs(pile []ECHConfigListDets, otype string,
 	source string, grouping string) {
 	// print dns update commands as directed
-	// TODO: extract/guess ttl/priority/targ-name from elsewhere
-	// TODO: consider other HTTPS RR content (ipv4hint etc.)
 	ttl := 3600
 	priority := 1
 	targetname := "."
@@ -754,9 +758,11 @@ func main() {
 			if os_j["endpoints"] != nil {
 				var optionals ECHOptionals
 				var ok bool
-				optionals.regeninterval, ok = os_j["regeninterval"].(int)
-				if !ok {
-					optionals.regeninterval = 3600
+				var tmp_fl float64
+				optionals.regeninterval = 3600
+				tmp_fl, ok = os_j["regeninterval"].(float64)
+				if ok {
+					optionals.regeninterval = int(tmp_fl)
 				}
 				eps := os_j["endpoints"]
 				parr := eps.([]any)
@@ -773,30 +779,60 @@ func main() {
 					ec, err := base64.StdEncoding.DecodeString(e0)
 					if err != nil {
 						fmt.Printf("error parsing origin-svcb: %v\n", err)
+						continue
 					}
 					// check for some optional things
-					optionals.priority, ok = d0["priority"].(int)
-					if !ok {
-						optionals.priority = 1
+					optionals.priority = 1 
+					tmp_fl, ok = d0["priority"].(float64)
+					if ok {
+						optionals.priority = int(tmp_fl)
 					}
-					optionals.ipv4hints, ok = p0["ipv4hints"].(string)
-					if !ok {
-						optionals.ipv4hints = ""
+					if p0["ipv4hint"] != nil {
+						for k, v := range p0["ipv4hint"].([]any) {
+							if k == 0 {
+								optionals.ipv4hint = v.(string)
+							} else {
+								optionals.ipv4hint += "," + v.(string)
+							}
+						}
 					}
-					optionals.ipv6hints, ok = p0["ipv6hints"].(string)
-					if !ok {
-						optionals.ipv6hints = ""
+					if p0["ipv6hint"] != nil {
+						for k, v := range p0["ipv6hint"].([]any) {
+							if k == 0 {
+								optionals.ipv6hint = v.(string)
+							} else {
+								optionals.ipv6hint += "," + v.(string)
+							}
+						}
 					}
-					optionals.alpn, ok = p0["alpn"].(string)
-					if !ok {
-						optionals.alpn = ""
+					if p0["alpn"] != nil {
+						for k, v := range p0["alpn"].([]any) {
+							if k == 0 {
+								optionals.alpn = v.(string)
+							} else {
+								optionals.alpn += "," + v.(string)
+							}
+						}
 					}
+					if p0["mandatory"] != nil {
+						for k, v := range p0["mandatory"].([]any) {
+							if k == 0 {
+								optionals.mandatory = v.(string)
+							} else {
+								optionals.mandatory += "," + v.(string)
+							}
+						}
+					}
+					if p0["no-default-alpn"] != nil {
+						optionals.no_default_alpn = true
+					}
+
 					if verbose && err == nil {
-						fmt.Printf("ECHConfigList value from origin_svcb %s\n", e0)
+						fmt.Printf("origin-svcb ECHConfigList value: %s\n", e0)
 					}
 					if add_to_pile(targetName, targetPort,
 						"origin-svcb", origin_svcb, ec, &optionals) != nil {
-						fmt.Printf("add_to_pile error for origin-svcb: %v\n", err)
+						fmt.Printf("origin-svcb add_to_pile error: %v\n", err)
 					}
 				}
 			}
@@ -824,8 +860,6 @@ func main() {
 	}
 	// unmarshall and pull out ech= strings
 	var https_rrs_json map[string]any
-	var optionals ECHOptionals
-	var ok bool
 	if err = json.Unmarshal(https_rrs, &https_rrs_json); err != nil {
 		if super_verbose {
 			fmt.Printf("unmarshal fail: %v\n", err)
@@ -850,33 +884,61 @@ func main() {
 		d0 := (val).(map[string]any)
 		if d0["type"].(float64) == 65 {
 			var tmp_ttl float64
+			var ok bool
+			currentttl := 0
 			tmp_ttl, ok = d0["TTL"].(float64)
 			if ok {
-				optionals.currentttl = int(tmp_ttl)
-			} else {
-				optionals.currentttl = 0
+				currentttl = int(tmp_ttl)
 			}
 			rrval := d0["data"].(string)
 			fvals := strings.Fields(rrval)
-			for _, v := range fvals {
-				// TODO: parse out priority, target, others
-				place := strings.LastIndex(v, "ech=")
-				if place != -1 {
-					if verbose {
-						fmt.Println("ECHConfigList from HTTPS RR", v[place+4:])
+			var optionals ECHOptionals
+			var dec []byte
+			var err error
+			echfound := false
+			optionals.currentttl = currentttl
+			for pi, part := range fvals {
+				if pi == 0 {
+					optionals.priority, err = strconv.Atoi(part)
+					if err != nil {
+						break
 					}
-					dec, err := base64.StdEncoding.DecodeString(v[place+4:])
+					continue
+				}
+				if pi == 1 {
+					optionals.target = part
+					continue
+				}
+				if strings.HasPrefix(part, "ech=") {
+					if verbose {
+						fmt.Println("ECHConfigList from HTTPS RR", part[4:])
+					}
+					dec, err = base64.StdEncoding.DecodeString(part[4:])
 					if err == nil {
 						dns_configs = append(dns_configs, dec)
 					}
+					echfound = true
+				}
+				if strings.HasPrefix(part, "ipv4hint=") {
+					optionals.ipv4hint = part[9:]
+				}
+				if strings.HasPrefix(part, "ipv6hint=") {
+					optionals.ipv6hint = part[9:]
+				}
+				if strings.HasPrefix(part, "alpn=") {
+					optionals.alpn = part[5:]
+				}
+				if strings.HasPrefix(part, "mandatory=") {
+					optionals.mandatory = part[10:]
+				}
+				if strings.HasPrefix(part, "no-default-alpn") {
+					optionals.no_default_alpn = true
 				}
 			}
-		}
-	}
-	for _, d := range dns_configs {
-		if add_to_pile(targetName, targetPort,
-			"dns", https_rrs_json, d, &optionals) != nil {
-			log.Fatalf("add_to_pile error for retry-configs: %v\n", err)
+			if echfound && add_to_pile(targetName, targetPort,
+				"dns", https_rrs_json, dec, &optionals) != nil {
+				log.Fatalf("add_to_pile error for HTTPS RR configs: %v\n", err)
+			}
 		}
 	}
 	if verbose {
