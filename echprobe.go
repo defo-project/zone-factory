@@ -623,8 +623,23 @@ func print_pile(pile []ECHConfigListDets, source string) {
 		}
 		fmt.Printf("\tList: %s\n",
 			base64.StdEncoding.EncodeToString(p.list))
-		// TODO: nice printing of optionals
-		fmt.Printf("\tOptionals: %v\n", p.optionals)
+		if p.source == "origin-svcb" {
+			fmt.Printf("\torigin-svcb regeninterval: %d, ", p.optionals.regeninterval)
+			fmt.Printf("priority: %d, ", p.optionals.priority)
+			fmt.Printf("target: %s\n", p.optionals.target)
+		}
+		if p.source == "dns" {
+			fmt.Printf("\tHTTPS RR TTL seen: %d, ", p.optionals.currentttl)
+			fmt.Printf("priority: %d, ", p.optionals.priority)
+			fmt.Printf("target: %s\n", p.optionals.target)
+		}
+		if p.source != "retry-configs" {
+			fmt.Printf("\tipv4hint: %s, ", p.optionals.ipv4hint)
+			fmt.Printf("ipv6hint: %s\n", p.optionals.ipv6hint)
+			fmt.Printf("\talpn: %s, ", p.optionals.alpn)
+			fmt.Printf("mandatory: %s, ", p.optionals.mandatory)
+			fmt.Printf("no-default-alpn: %v\n", p.optionals.no_default_alpn)
+		}
 		for j, d := range p.details {
 			fmt.Printf("\t\tSingleton %d\n", j)
 			fmt.Printf("\t\tVersion: %s, config_id: %s, checked: %t\n",
@@ -747,7 +762,7 @@ func main() {
 
 	// check if we have an origin-svcb
 	origin_svcb, err := get_origin_svcb(targetName, targetPort)
-	// extract ECH from that
+	// try extract ECH, and other details from that
 	if err == nil {
 		var os_j map[string]any
 		if err = json.Unmarshal(origin_svcb, &os_j); err != nil {
@@ -786,6 +801,10 @@ func main() {
 					tmp_fl, ok = d0["priority"].(float64)
 					if ok {
 						optionals.priority = int(tmp_fl)
+					}
+					optionals.target = "."
+					if d0["target"] != nil {
+						optionals.target = d0["target"].(string)
 					}
 					if p0["ipv4hint"] != nil {
 						for k, v := range p0["ipv4hint"].([]any) {
