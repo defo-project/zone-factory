@@ -23,7 +23,7 @@
 
 // Given a DNS name, this script probes for Encrypted Client Hello (ECH,
 // RFC9849) configurations (public keys etc) in order to assist admins
-// in checking or fixing their setups. There are 3 possible 
+// in checking or fixing their setups. There are 3 possible
 // sources for ECH configs: 1) in HTTPS RRs in the DNS, 2) via
 // ECH retry-configs and 3) via a .well-known URL.
 // The set of ECH configs found are then tested and listed in output.
@@ -69,20 +69,20 @@ import (
 type ECHOptionals struct {
 	// things that may optionally accompany an ECHConfigList
 	// there are more things one could add here later
-	regeninterval int // from orivin-svcb 
-	currentttl int // current-TTL in HTTP answer
-	priority int // from orivin-svcb or HTTPS
-	target string // target from origin-svcb or HTTPS
-	ipv4hint string  // from orivin-svcb or HTTPS
-	ipv6hint string  // from orivin-svcb or HTTPS
-	alpn string // from orivin-svcb or HTTPS
-	mandatory string // mandatory svcparamkeys
-	no_default_alpn bool // that one:-)
+	regeninterval   int    // from orivin-svcb
+	currentttl      int    // current-TTL in HTTP answer
+	priority        int    // from orivin-svcb or HTTPS
+	target          string // target from origin-svcb or HTTPS
+	ipv4hint        string // from orivin-svcb or HTTPS
+	ipv6hint        string // from orivin-svcb or HTTPS
+	alpn            string // from orivin-svcb or HTTPS
+	mandatory       string // mandatory svcparamkeys
+	no_default_alpn bool   // that one:-)
 }
 
 type ECHConfigDets struct {
 	// This represents a singleton ECHConfigList
-	works        bool   // Set to TRUE when validated as working
+	works        bool // Set to TRUE when validated as working
 	version      string
 	config_id    string
 	max_name_len int
@@ -96,12 +96,12 @@ type ECHConfigDets struct {
 
 type ECHConfigListDets struct {
 	// This represents a full ECHConfigList
-	name     string // what'd be in an inner SNI
-	port     string // service port (usually 443)
-	source   string // retry-config or origin-svcb or dns
-	original any    // original form in which we got this (e.g. DNS transaction)
-	list     []byte // the encoded ECHConfigList
-	details  []ECHConfigDets // the singletons
+	name      string          // what'd be in an inner SNI
+	port      string          // service port (usually 443)
+	source    string          // retry-config or origin-svcb or dns
+	original  any             // original form in which we got this (e.g. DNS transaction)
+	list      []byte          // the encoded ECHConfigList
+	details   []ECHConfigDets // the singletons
 	optionals ECHOptionals
 }
 
@@ -124,7 +124,26 @@ func get_target_url(host string, port string) string {
 
 // Try URL via QUIC, then, if needed, TLS/TCP, return bytes found or error
 // TODO: do more happy eyeballs v3 like stuff...
-func my_quic_then_tcp(echcfg []byte, the_url string) (*http.Response, error) {
+/*
+  in the optionals we may have:
+    target: another service name, ipv[46]hint: some addresses, alpn
+  our HEv3 with those will be:
+      if alpn set to h3 only try that
+      if alpn set to h2/http1.1 only try that
+    if other alpn, try both, setting the alpn
+    if no alpn, try h3 then tls/tcp with no alpn
+
+    addresses: we do nothing in parallel, we don't need to be fast
+    candidate addresses:
+        try ipv6hint, then ipv4hint, then target if set
+        if target set only go there
+        if no target just go to origin in URL
+
+    we might wanna modify optionals to say what was tried/worked?
+*/
+
+func my_quic_then_tcp(echcfg []byte, the_url string,
+	optionals *ECHOptionals) (*http.Response, error) {
 	targetURL, err := url.Parse(the_url)
 	if err != nil {
 		if super_verbose {
@@ -136,7 +155,7 @@ func my_quic_then_tcp(echcfg []byte, the_url string) (*http.Response, error) {
 	h3tr := &http3.Transport{
 		TLSClientConfig: &tls.Config{
 			EncryptedClientHelloConfigList: echcfg,
-			NextProtos: []string{http3.NextProtoH3}, // set the ALPN for HTTP/3
+			NextProtos:                     []string{http3.NextProtoH3}, // set the ALPN for HTTP/3
 		},
 		QUICConfig: &quic.Config{}, // QUIC connection options
 	}
@@ -187,7 +206,7 @@ func my_quic_then_tcp(echcfg []byte, the_url string) (*http.Response, error) {
 
 func get_origin_svcb(host string, port string) ([]byte, error) {
 	targetURL := get_target_url(host, port)
-	resp, err := my_quic_then_tcp(nil, targetURL)
+	resp, err := my_quic_then_tcp(nil, targetURL, nil)
 	if err != nil {
 		if super_verbose {
 			fmt.Printf("failed to perform request %s: %v", targetURL, err)
@@ -237,7 +256,7 @@ func parse_cfg_list(cfg []byte) ([]ECHConfigDets, error) {
 			fmt.Printf("Config %d: %s\n", count,
 				base64.StdEncoding.EncodeToString(thiscfg))
 			//fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
-				//olen, offset, thislen)
+			//olen, offset, thislen)
 		}
 
 		tlen := len(thiscfg)
@@ -276,11 +295,11 @@ func parse_cfg_list(cfg []byte) ([]ECHConfigDets, error) {
 		}
 		pns := thiscfg[pnoff+1 : pnoff+1+pnlen]
 		////if super_verbose {
-			//fmt.Printf("tlen: %d, publen: %d, suiteoff: %d\n",
-				//tlen, publen, suiteoff)
-			//fmt.Printf("suitelen: %d, pnoff: %d, pnlen: %d\n",
-				//suitelen, pnoff, pnlen)
-			//fmt.Println(pns)
+		//fmt.Printf("tlen: %d, publen: %d, suiteoff: %d\n",
+		//tlen, publen, suiteoff)
+		//fmt.Printf("suitelen: %d, pnoff: %d, pnlen: %d\n",
+		//suitelen, pnoff, pnlen)
+		//fmt.Println(pns)
 		//}
 		pn := string(pns)
 		det.public_name = pn
@@ -316,7 +335,7 @@ func get_public_name_conn(host string, port string) (string, error) {
 	// the public name in the above config
 	suffix := ", not public.test.defs.ie"
 
-	if _, err := my_quic_then_tcp(fakeECH, targetURL); err != nil {
+	if _, err := my_quic_then_tcp(fakeECH, targetURL, nil); err != nil {
 		var certErr *tls.CertificateVerificationError
 		if errors.As(err, &certErr) {
 			serr := certErr.Error()
@@ -399,7 +418,7 @@ func get_retry_configs(host string, port string,
 	}
 
 	targetURL := get_target_url(host, port)
-	_, err := my_quic_then_tcp(fakeECH_good_pn, targetURL)
+	_, err := my_quic_then_tcp(fakeECH_good_pn, targetURL, nil)
 	if err != nil {
 		var echErr *tls.ECHRejectionError
 		if errors.As(err, &echErr) && len(echErr.RetryConfigList) > 0 {
@@ -450,7 +469,7 @@ func get_https_rrs(host string, port string) ([]byte, error) {
 }
 
 func verify_configs(host string, port string,
-	configs []byte) (int, []byte, error) {
+	configs []byte, optionals *ECHOptionals) (int, []byte, error) {
 	count := int(0)
 	olen := len(configs)
 	offset := int(4)
@@ -472,10 +491,11 @@ func verify_configs(host string, port string,
 			fmt.Printf("Config %d: %s\n", count,
 				base64.StdEncoding.EncodeToString(thiscfg))
 			//fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
-				//olen, offset, thislen)
+			//olen, offset, thislen)
 		}
 		targetURL := get_target_url(host, port)
-		_, nerr := my_quic_then_tcp(thiscfg, targetURL)
+		// TODO: goto optionals.target if value isn't "."
+		_, nerr := my_quic_then_tcp(thiscfg, targetURL, optionals)
 		if nerr != nil {
 			if super_verbose {
 				fmt.Printf("Config %d failed: %s\n", count,
@@ -591,7 +611,8 @@ func verify_thepile() {
 		p := thepile[i]
 		for j := 0; j < len(p.details); j++ {
 			d := p.details[j]
-			count, _, err := verify_configs(p.name, p.port, d.singleton)
+			count, _, err := verify_configs(p.name, p.port, d.singleton,
+				&p.optionals)
 			if err == nil && count == 1 {
 				if verbose {
 					fmt.Printf("Verified %s:%s singleton %d from %s\n",
@@ -797,7 +818,7 @@ func main() {
 						continue
 					}
 					// check for some optional things
-					optionals.priority = 1 
+					optionals.priority = 1
 					tmp_fl, ok = d0["priority"].(float64)
 					if ok {
 						optionals.priority = int(tmp_fl)
