@@ -84,7 +84,8 @@ type ECHOptionals struct {
 
 type ECHConfigDets struct {
 	// This represents a singleton ECHConfigList
-	works        bool // Set to TRUE when validated as working
+	works        bool   // Set to TRUE when validated as working
+	works_via    string // set when setting the above
 	version      string
 	config_id    string
 	max_name_len int
@@ -134,8 +135,8 @@ func get_rc(err error) ([]byte, error) {
 	return nil, errors.New("no r-c")
 }
 
-// Try URL via QUIC, then, if needed, TLS/TCP, return bytes found or error
 /*
+  Try URL via QUIC, then, if needed, TLS/TCP, return bytes found or error
   in the optionals we may have:
 
     target (another name), ipv[46]hint (addresses), alpn
@@ -164,21 +165,20 @@ func get_rc(err error) ([]byte, error) {
 */
 
 func my_quic_then_tcp(echcfg []byte, host string, port string,
-	optionals *ECHOptionals, wantrc bool) (*http.Response, error) {
+	optionals *ECHOptionals, wantrc bool) (*http.Response, string, error) {
 
 	// various vars as to which are the effective ("e_") values to use
+	var viastr string
 	var e_alpn []string
 	var e_addrs []string
 	skip_h3 := false
-	//var uport uint16
 
 	the_url := get_target_url(host, port)
 	tport, err := strconv.Atoi(port)
 	if err != nil || tport >= 65536 {
 		log.Fatalf("Bad port %s: %v\n", port, err)
-		return nil, err
+		return nil, "", err
 	}
-	//uport = uint16(tport)
 	e_alpn = nil
 	e_addrs = nil
 	if optionals != nil {
@@ -210,33 +210,53 @@ func my_quic_then_tcp(echcfg []byte, host string, port string,
 		if super_verbose {
 			fmt.Printf("url.Parse failed for %s: %v\n", the_url, err)
 		}
-		return nil, err
+		return nil, "", err
 	}
 
 	if super_verbose {
 		fmt.Printf("addrs: %v\n", e_addrs)
 	}
 	for _, myaddr := range e_addrs {
-
+		viastr = myaddr + ":" + port
 		if !skip_h3 {
 			if super_verbose {
-				fmt.Printf("trying addr via h3: %v\n", myaddr)
+				fmt.Printf("trying addr via h3: %s:%s\n", myaddr, port)
 			}
-			// try quic
-			/*
-							remote := net.UDPAddrFromAddrPort(netip.AddrPortFrom(iphost, uport))
-							d := net.Dialer{
-								RemoteAddr: remote,
-				        		Timeout:   duration,
-				        		KeepAlive: duration,
-				    		}
-			*/
 			h3tr := &http3.Transport{
 				TLSClientConfig: &tls.Config{
 					EncryptedClientHelloConfigList: echcfg,
 					NextProtos:                     e_alpn,
 				},
-				QUICConfig: &quic.Config{}, // QUIC connection options
+				QUICConfig: &quic.Config{},
+				Dial: func(ctx context.Context, addr string, tlsConf *tls.Config, quicConf *quic.Config) (*quic.Conn, error) {
+					// this isn't entirely right but is good enough
+					var pconn net.PacketConn
+					var perr error
+					if strings.Contains(myaddr, ":") { // v6 case
+						laddr, err := net.ResolveUDPAddr("udp6", ":::0")
+						if err != nil {
+							return nil, fmt.Errorf("quic local listener resolve failed: %w", err)
+						}
+						pconn, perr = net.ListenUDP("udp6", laddr)
+						if perr != nil {
+							return nil, fmt.Errorf("quic local listener binding failed: %w", err)
+						}
+					} else {
+						laddr, err := net.ResolveUDPAddr("udp6", ":::0")
+						if err != nil {
+							return nil, fmt.Errorf("quic local listener resolve failed: %w", err)
+						}
+						pconn, perr = net.ListenUDP("udp6", laddr)
+						if perr != nil {
+							return nil, fmt.Errorf("quic local listener binding failed: %w", err)
+						}
+					}
+					a, err := net.ResolveUDPAddr("udp", myaddr+":"+port)
+					if err != nil {
+						return nil, err
+					}
+					return quic.Dial(ctx, pconn, a, tlsConf, quicConf)
+				},
 			}
 			defer h3tr.Close()
 			h3client := &http.Client{
@@ -256,14 +276,14 @@ func my_quic_then_tcp(echcfg []byte, host string, port string,
 					if super_verbose {
 						fmt.Printf("h3 request failed as desired %s: via %s:%s %s\n", the_url, myaddr, port, h3resp.Proto)
 					}
-					return h3resp, h3err
+					return h3resp, viastr, h3err
 				}
 			}
 			if h3err == nil && h3resp.StatusCode == 200 {
 				if super_verbose {
 					fmt.Printf("h3 request worked for %s: via %s:%s %s\n", the_url, myaddr, port, h3resp.Proto)
 				}
-				return h3resp, h3err
+				return h3resp, viastr, h3err
 			}
 			if super_verbose {
 				fmt.Printf("h3 request failed for %s: via %s:%s : %v\n", the_url, myaddr, port, h3err)
@@ -300,7 +320,7 @@ func my_quic_then_tcp(echcfg []byte, host string, port string,
 				if super_verbose {
 					fmt.Printf("http/tls/tcp request failed as desired %s: via %s:%s %v\n", the_url, myaddr, port, terr)
 				}
-				return tresp, terr
+				return tresp, viastr, terr
 			}
 		}
 		if terr != nil && super_verbose {
@@ -310,15 +330,15 @@ func my_quic_then_tcp(echcfg []byte, host string, port string,
 			if super_verbose {
 				fmt.Printf("http/tls/tcp request worked for %s: via %s:%s\n", the_url, myaddr, port)
 			}
-			return tresp, terr
+			return tresp, viastr, terr
 		}
 	}
-	return nil, nil
+	return nil, "", nil
 }
 
 func get_origin_svcb(host string, port string) ([]byte, error) {
 	targetURL := get_target_url(host, port)
-	resp, err := my_quic_then_tcp(nil, host, port, nil, false)
+	resp, _, err := my_quic_then_tcp(nil, host, port, nil, false)
 	if err != nil {
 		if super_verbose {
 			fmt.Printf("failed to perform request %s: %v", targetURL, err)
@@ -367,8 +387,6 @@ func parse_cfg_list(cfg []byte) ([]ECHConfigDets, error) {
 		if super_verbose {
 			fmt.Printf("Config %d: %s\n", count,
 				base64.StdEncoding.EncodeToString(thiscfg))
-			//fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
-			//olen, offset, thislen)
 		}
 
 		tlen := len(thiscfg)
@@ -406,13 +424,6 @@ func parse_cfg_list(cfg []byte) ([]ECHConfigDets, error) {
 			return nil, errors.New("ECHConfigList too short (4)")
 		}
 		pns := thiscfg[pnoff+1 : pnoff+1+pnlen]
-		////if super_verbose {
-		//fmt.Printf("tlen: %d, publen: %d, suiteoff: %d\n",
-		//tlen, publen, suiteoff)
-		//fmt.Printf("suitelen: %d, pnoff: %d, pnlen: %d\n",
-		//suitelen, pnoff, pnlen)
-		//fmt.Println(pns)
-		//}
 		pn := string(pns)
 		det.public_name = pn
 		if (pnoff + 1 + pnlen + 2) > tlen {
@@ -446,7 +457,7 @@ func get_public_name_conn(host string, port string) (string, error) {
 	// the public name in the above config
 	suffix := ", not public.test.defs.ie"
 
-	if _, err := my_quic_then_tcp(fakeECH, host, port, nil, false); err != nil {
+	if _, _, err := my_quic_then_tcp(fakeECH, host, port, nil, false); err != nil {
 		var certErr *tls.CertificateVerificationError
 		if errors.As(err, &certErr) {
 			serr := certErr.Error()
@@ -527,7 +538,7 @@ func get_retry_configs(host string, port string,
 		fmt.Printf("\nFake ECHConfig to try get retry-configs  %s\n",
 			base64.StdEncoding.EncodeToString(fakeECH_good_pn))
 	}
-	_, err := my_quic_then_tcp(fakeECH_good_pn, host, port, nil, true)
+	_, _, err := my_quic_then_tcp(fakeECH_good_pn, host, port, nil, true)
 	rc, gerr := get_rc(err)
 	if gerr == nil {
 		return rc, gerr
@@ -572,7 +583,8 @@ func get_https_rrs(host string, port string) ([]byte, error) {
 }
 
 func verify_configs(host string, port string,
-	configs []byte, optionals *ECHOptionals) (int, []byte, error) {
+	configs []byte, optionals *ECHOptionals) (int, []byte, string, error) {
+	var viastr string
 	count := int(0)
 	olen := len(configs)
 	offset := int(4)
@@ -585,7 +597,7 @@ func verify_configs(host string, port string,
 		if thislen <= 0 || offset+thislen >= olen {
 			fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
 				olen, offset, thislen)
-			return 0, nil, errors.New("ECHConfigList decode error (1)")
+			return 0, nil, "", errors.New("ECHConfigList decode error (1)")
 		}
 		thiscfg := []byte{byte((thislen + 4) / 256), byte((thislen + 4) % 256),
 			0xfe, 0x0d}
@@ -596,8 +608,8 @@ func verify_configs(host string, port string,
 			//fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
 			//olen, offset, thislen)
 		}
-		// TODO: goto optionals.target if value isn't "."
-		_, nerr := my_quic_then_tcp(thiscfg, host, port, optionals, false)
+		_, xviastr, nerr := my_quic_then_tcp(thiscfg, host, port, optionals, false)
+		viastr = xviastr
 		if nerr != nil {
 			if super_verbose {
 				fmt.Printf("Config %d failed: %s\n", count,
@@ -614,7 +626,7 @@ func verify_configs(host string, port string,
 	goodones[0] = byte(goodlen / 256)
 	goodones[1] = byte(goodlen % 256)
 
-	return count, goodones, nil
+	return count, goodones, viastr, nil
 }
 
 func add_to_pile(host string, port string, source string, original any,
@@ -713,7 +725,7 @@ func verify_thepile() {
 		p := thepile[i]
 		for j := 0; j < len(p.details); j++ {
 			d := p.details[j]
-			count, _, err := verify_configs(p.name, p.port, d.singleton,
+			count, _, viastr, err := verify_configs(p.name, p.port, d.singleton,
 				&p.optionals)
 			if err == nil && count == 1 {
 				if verbose {
@@ -721,6 +733,7 @@ func verify_thepile() {
 						p.name, p.port, j, p.source)
 				}
 				thepile[i].details[j].works = true
+				thepile[i].details[j].works_via = viastr
 				total_checked_good += 1
 			} else {
 				if verbose {
@@ -765,8 +778,8 @@ func print_pile(pile []ECHConfigListDets, source string) {
 		}
 		for j, d := range p.details {
 			fmt.Printf("\t\tSingleton %d\n", j)
-			fmt.Printf("\t\tVersion: %s, config_id: %s, checked: %t\n",
-				d.version, d.config_id, d.works)
+			fmt.Printf("\t\tVersion: %s, config_id: %s, checked: %t, via: %s\n",
+				d.version, d.config_id, d.works, d.works_via)
 			fmt.Printf("\t\tpublic_name: %s\n", d.public_name)
 			fmt.Printf("\t\tHPKE suites: %s\n", print_suites(d))
 			fmt.Printf("\t\tSingleton: %s\n",
