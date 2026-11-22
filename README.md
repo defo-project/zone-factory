@@ -9,7 +9,7 @@ Tools for publishing and updating DNS records to carry ECH configuration data
 - [ECHLib.py](./ECHLib.py),
   library providing functions to support the above
 - [updzone-from-wkech.py](./updzone-from-wkech.py)
-  validates WKECH data and builds zone update transaction command stream 
+  validates WKECH data and builds zone update transaction command stream
   for external BIND9 *nsupdate*; now abandoned, kept for reference.
 
 - [wkech-web-server.sh](./wkech-web-server.sh) is a bash script for managing
@@ -17,3 +17,7 @@ Tools for publishing and updating DNS records to carry ECH configuration data
   differ)
     - [wkech-web-server-var.sh](./wkech-web-server-vars.sh) is a file that's
       included in the above for setting the specific names/paths to use.
+
+- [echprobe](./echprobe.md) a tool for probing a web-site/DNS name for
+  ECH configuration information and to assist in publishing correct
+  values in the DNS

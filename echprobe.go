@@ -37,6 +37,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -45,6 +46,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -112,6 +114,7 @@ var doh_url string = ""
 var thepile []ECHConfigListDets
 var total_checked_good int
 
+// just special case port 80/443
 func get_target_url(host string, port string) string {
 	var url string
 	if port == "443" || port == "80" {
@@ -122,12 +125,22 @@ func get_target_url(host string, port string) string {
 	return url
 }
 
+// return a retry-configs if relevant and found
+func get_rc(err error) ([]byte, error) {
+	var echErr *tls.ECHRejectionError
+	if errors.As(err, &echErr) && len(echErr.RetryConfigList) > 0 {
+		return echErr.RetryConfigList, nil
+	}
+	return nil, errors.New("no r-c")
+}
+
 // Try URL via QUIC, then, if needed, TLS/TCP, return bytes found or error
-// TODO: do more happy eyeballs v3 like stuff...
 /*
   in the optionals we may have:
-    target: another service name, ipv[46]hint: some addresses, alpn
-  our HEv3 with those will be:
+
+    target (another name), ipv[46]hint (addresses), alpn
+
+  	alpn:
       if alpn set to h3 only try that
       if alpn set to h2/http1.1 only try that
     if other alpn, try both, setting the alpn
@@ -139,11 +152,59 @@ func get_target_url(host string, port string) string {
         if target set only go there
         if no target just go to origin in URL
 
-    we might wanna modify optionals to say what was tried/worked?
+	we make a list of addresses/names to check, with ipv6hints
+	firsts, then ipv4hints, then the target name (if present)
+	and work our way through those, trying QUIC 1st (if needed),
+	then tls/tcp for each
+
+    we might wanna modify optionals to say what worked?
+
+	we also input whether we want retry-configs as an output in
+	which case an ECH-required error is a success:-)
 */
 
-func my_quic_then_tcp(echcfg []byte, the_url string,
-	optionals *ECHOptionals) (*http.Response, error) {
+func my_quic_then_tcp(echcfg []byte, host string, port string,
+	optionals *ECHOptionals, wantrc bool) (*http.Response, error) {
+
+	// various vars as to which are the effective ("e_") values to use
+	var e_alpn []string
+	var e_addrs []string
+	skip_h3 := false
+	//var uport uint16
+
+	the_url := get_target_url(host, port)
+	tport, err := strconv.Atoi(port)
+	if err != nil || tport >= 65536 {
+		log.Fatalf("Bad port %s: %v\n", port, err)
+		return nil, err
+	}
+	//uport = uint16(tport)
+	e_alpn = nil
+	e_addrs = nil
+	if optionals != nil {
+		if optionals.alpn != "" {
+			e_alpn = strings.Split(optionals.alpn, ",")
+			// check if h3 in specifically provided alpn
+			if !strings.Contains(optionals.alpn, "h3") {
+				skip_h3 = true
+			}
+		} else {
+			if !optionals.no_default_alpn {
+				// try this as default
+				e_alpn = []string{"h3", "h3", "http/1.1"}
+			}
+		}
+		// array of ipv6hints 1st, then ipv4hint, then host name
+		if optionals.ipv6hint != "" {
+			e_addrs = strings.Split(optionals.ipv6hint, ",")
+		}
+		if optionals.ipv4hint != "" {
+			t_addrs := strings.Split(optionals.ipv4hint, ",")
+			e_addrs = append(e_addrs, t_addrs[:]...)
+		}
+	}
+	e_addrs = append(e_addrs, host)
+
 	targetURL, err := url.Parse(the_url)
 	if err != nil {
 		if super_verbose {
@@ -151,62 +212,113 @@ func my_quic_then_tcp(echcfg []byte, the_url string,
 		}
 		return nil, err
 	}
-	// try quic
-	h3tr := &http3.Transport{
-		TLSClientConfig: &tls.Config{
-			EncryptedClientHelloConfigList: echcfg,
-			NextProtos:                     []string{http3.NextProtoH3}, // set the ALPN for HTTP/3
-		},
-		QUICConfig: &quic.Config{}, // QUIC connection options
-	}
-	defer h3tr.Close()
-	h3client := &http.Client{
-		Timeout:   duration,
-		Transport: h3tr,
-	}
-	h3resp, h3err := h3client.Do(&http.Request{
-		Method: "GET",
-		Header: map[string][]string{
-			"Accept": {"application/json"},
-		},
-		URL: targetURL,
-	})
-	if h3err == nil && h3resp.StatusCode == 200 {
-		if super_verbose {
-			fmt.Printf("h3 request worked for %s: %s\n", the_url, h3resp.Proto)
-		}
-		return h3resp, h3err
-	}
 
-	// fallback to trying tls/tcp
 	if super_verbose {
-		fmt.Printf("h3 request failed for %s: %v\n", the_url, h3err)
+		fmt.Printf("addrs: %v\n", e_addrs)
 	}
-	ttr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			MinVersion:                     tls.VersionTLS13,
-			EncryptedClientHelloConfigList: echcfg,
-		},
+	for _, myaddr := range e_addrs {
+
+		if !skip_h3 {
+			if super_verbose {
+				fmt.Printf("trying addr via h3: %v\n", myaddr)
+			}
+			// try quic
+			/*
+							remote := net.UDPAddrFromAddrPort(netip.AddrPortFrom(iphost, uport))
+							d := net.Dialer{
+								RemoteAddr: remote,
+				        		Timeout:   duration,
+				        		KeepAlive: duration,
+				    		}
+			*/
+			h3tr := &http3.Transport{
+				TLSClientConfig: &tls.Config{
+					EncryptedClientHelloConfigList: echcfg,
+					NextProtos:                     e_alpn,
+				},
+				QUICConfig: &quic.Config{}, // QUIC connection options
+			}
+			defer h3tr.Close()
+			h3client := &http.Client{
+				Timeout:   duration,
+				Transport: h3tr,
+			}
+			h3resp, h3err := h3client.Do(&http.Request{
+				Method: "GET",
+				Header: map[string][]string{
+					"Accept": {"application/json"},
+				},
+				URL: targetURL,
+			})
+			if wantrc {
+				_, isone := get_rc(h3err)
+				if isone == nil {
+					if super_verbose {
+						fmt.Printf("h3 request failed as desired %s: via %s:%s %s\n", the_url, myaddr, port, h3resp.Proto)
+					}
+					return h3resp, h3err
+				}
+			}
+			if h3err == nil && h3resp.StatusCode == 200 {
+				if super_verbose {
+					fmt.Printf("h3 request worked for %s: via %s:%s %s\n", the_url, myaddr, port, h3resp.Proto)
+				}
+				return h3resp, h3err
+			}
+			if super_verbose {
+				fmt.Printf("h3 request failed for %s: via %s:%s : %v\n", the_url, myaddr, port, h3err)
+			}
+		}
+
+		if super_verbose {
+			fmt.Printf("trying addr via http/tls/tcp: %v\n", myaddr)
+		}
+		// fallback to trying tls/tcp
+		ttr := &http.Transport{
+			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				conn, err := tls.Dial(network, myaddr+":"+port, &tls.Config{
+					MinVersion:                     tls.VersionTLS13,
+					EncryptedClientHelloConfigList: echcfg,
+					NextProtos:                     e_alpn,
+				})
+				return conn, err
+			},
+		}
+		tclient := &http.Client{
+			Transport: ttr,
+		}
+		tresp, terr := tclient.Do(&http.Request{
+			Method: "GET",
+			Header: map[string][]string{
+				"Accept": {"application/json"},
+			},
+			URL: targetURL,
+		})
+		if wantrc {
+			_, isone := get_rc(terr)
+			if isone == nil {
+				if super_verbose {
+					fmt.Printf("http/tls/tcp request failed as desired %s: via %s:%s %v\n", the_url, myaddr, port, terr)
+				}
+				return tresp, terr
+			}
+		}
+		if terr != nil && super_verbose {
+			fmt.Printf("http/tls/tcp request failed for %s: via %s:%s %v\n", the_url, myaddr, port, terr)
+		}
+		if terr == nil {
+			if super_verbose {
+				fmt.Printf("http/tls/tcp request worked for %s: via %s:%s\n", the_url, myaddr, port)
+			}
+			return tresp, terr
+		}
 	}
-	tclient := &http.Client{
-		Transport: ttr,
-	}
-	tresp, terr := tclient.Do(&http.Request{
-		Method: "GET",
-		Header: map[string][]string{
-			"Accept": {"application/json"},
-		},
-		URL: targetURL,
-	})
-	if terr != nil && super_verbose {
-		fmt.Printf("http/tls/tcp failed for %s: %v\n", the_url, terr)
-	}
-	return tresp, terr
+	return nil, nil
 }
 
 func get_origin_svcb(host string, port string) ([]byte, error) {
 	targetURL := get_target_url(host, port)
-	resp, err := my_quic_then_tcp(nil, targetURL, nil)
+	resp, err := my_quic_then_tcp(nil, host, port, nil, false)
 	if err != nil {
 		if super_verbose {
 			fmt.Printf("failed to perform request %s: %v", targetURL, err)
@@ -325,7 +437,6 @@ func get_public_name_conn(host string, port string) (string, error) {
 	// we expect a cert error initially as the public name in the fake
 	// ECH below will be wrong we use the error from that to get the
 	// correct public_name
-	targetURL := get_target_url(host, port)
 	// a bad ECHConfig to try elicit retry-configs
 	fakeECH, err := base64.StdEncoding.DecodeString(
 		"AEb+DQBCqQAgACBlm7cfDx/gKuUAwRTe+" +
@@ -335,7 +446,7 @@ func get_public_name_conn(host string, port string) (string, error) {
 	// the public name in the above config
 	suffix := ", not public.test.defs.ie"
 
-	if _, err := my_quic_then_tcp(fakeECH, targetURL, nil); err != nil {
+	if _, err := my_quic_then_tcp(fakeECH, host, port, nil, false); err != nil {
 		var certErr *tls.CertificateVerificationError
 		if errors.As(err, &certErr) {
 			serr := certErr.Error()
@@ -416,20 +527,12 @@ func get_retry_configs(host string, port string,
 		fmt.Printf("\nFake ECHConfig to try get retry-configs  %s\n",
 			base64.StdEncoding.EncodeToString(fakeECH_good_pn))
 	}
-
-	targetURL := get_target_url(host, port)
-	_, err := my_quic_then_tcp(fakeECH_good_pn, targetURL, nil)
-	if err != nil {
-		var echErr *tls.ECHRejectionError
-		if errors.As(err, &echErr) && len(echErr.RetryConfigList) > 0 {
-			return echErr.RetryConfigList, nil
-		}
-		if super_verbose {
-			fmt.Printf("failed to get retry_configs %v\n", err)
-		}
-		return []byte{}, err
+	_, err := my_quic_then_tcp(fakeECH_good_pn, host, port, nil, true)
+	rc, gerr := get_rc(err)
+	if gerr == nil {
+		return rc, gerr
 	}
-	return []byte{}, nil
+	return nil, errors.New("no retry_configs somehow")
 }
 
 func get_https_rrs(host string, port string) ([]byte, error) {
@@ -493,9 +596,8 @@ func verify_configs(host string, port string,
 			//fmt.Printf("olen: %d, offset, %d, thislen: %d\n",
 			//olen, offset, thislen)
 		}
-		targetURL := get_target_url(host, port)
 		// TODO: goto optionals.target if value isn't "."
-		_, nerr := my_quic_then_tcp(thiscfg, targetURL, optionals)
+		_, nerr := my_quic_then_tcp(thiscfg, host, port, optionals, false)
 		if nerr != nil {
 			if super_verbose {
 				fmt.Printf("Config %d failed: %s\n", count,
@@ -748,7 +850,6 @@ func print_dns_instrs(pile []ECHConfigListDets, otype string,
 func main() {
 	var targetName string
 	var targetPort string
-	var retry_configs []byte
 	var outputtype string
 	var outputsource string
 	var outputgrouping string
@@ -781,210 +882,214 @@ func main() {
 		os.Exit(1)
 	}
 
-	// check if we have an origin-svcb
-	origin_svcb, err := get_origin_svcb(targetName, targetPort)
-	// try extract ECH, and other details from that
-	if err == nil {
-		var os_j map[string]any
-		if err = json.Unmarshal(origin_svcb, &os_j); err != nil {
-			if verbose {
-				fmt.Printf("origin_svcb unmarshal fail: %v\n", err)
-			}
-		} else {
-			if os_j["endpoints"] != nil {
-				var optionals ECHOptionals
-				var ok bool
-				var tmp_fl float64
-				optionals.regeninterval = 3600
-				tmp_fl, ok = os_j["regeninterval"].(float64)
-				if ok {
-					optionals.regeninterval = int(tmp_fl)
+	if outputsource == "all" || outputsource == "origin-svcb" {
+		// check if we have an origin-svcb
+		origin_svcb, err := get_origin_svcb(targetName, targetPort)
+		// try extract ECH, and other details from that
+		if err == nil {
+			var os_j map[string]any
+			if err = json.Unmarshal(origin_svcb, &os_j); err != nil {
+				if verbose {
+					fmt.Printf("origin_svcb unmarshal fail: %v\n", err)
 				}
-				eps := os_j["endpoints"]
-				parr := eps.([]any)
-				for _, val := range parr {
-					d0 := (val).(map[string]any)
-					if d0["params"] == nil {
-						continue
-					}
-					p0 := d0["params"].(map[string]any)
-					if p0["ech"] == nil {
-						continue
-					}
-					e0 := p0["ech"].(string)
-					ec, err := base64.StdEncoding.DecodeString(e0)
-					if err != nil {
-						fmt.Printf("error parsing origin-svcb: %v\n", err)
-						continue
-					}
-					// check for some optional things
-					optionals.priority = 1
-					tmp_fl, ok = d0["priority"].(float64)
+			} else {
+				if os_j["endpoints"] != nil {
+					var optionals ECHOptionals
+					var ok bool
+					var tmp_fl float64
+					optionals.regeninterval = 3600
+					tmp_fl, ok = os_j["regeninterval"].(float64)
 					if ok {
-						optionals.priority = int(tmp_fl)
+						optionals.regeninterval = int(tmp_fl)
 					}
-					optionals.target = "."
-					if d0["target"] != nil {
-						optionals.target = d0["target"].(string)
-					}
-					if p0["ipv4hint"] != nil {
-						for k, v := range p0["ipv4hint"].([]any) {
-							if k == 0 {
-								optionals.ipv4hint = v.(string)
-							} else {
-								optionals.ipv4hint += "," + v.(string)
+					eps := os_j["endpoints"]
+					parr := eps.([]any)
+					for _, val := range parr {
+						d0 := (val).(map[string]any)
+						if d0["params"] == nil {
+							continue
+						}
+						p0 := d0["params"].(map[string]any)
+						if p0["ech"] == nil {
+							continue
+						}
+						e0 := p0["ech"].(string)
+						ec, err := base64.StdEncoding.DecodeString(e0)
+						if err != nil {
+							fmt.Printf("error parsing origin-svcb: %v\n", err)
+							continue
+						}
+						// check for some optional things
+						optionals.priority = 1
+						tmp_fl, ok = d0["priority"].(float64)
+						if ok {
+							optionals.priority = int(tmp_fl)
+						}
+						optionals.target = "."
+						if d0["target"] != nil {
+							optionals.target = d0["target"].(string)
+						}
+						if p0["ipv4hint"] != nil {
+							for k, v := range p0["ipv4hint"].([]any) {
+								if k == 0 {
+									optionals.ipv4hint = v.(string)
+								} else {
+									optionals.ipv4hint += "," + v.(string)
+								}
 							}
 						}
-					}
-					if p0["ipv6hint"] != nil {
-						for k, v := range p0["ipv6hint"].([]any) {
-							if k == 0 {
-								optionals.ipv6hint = v.(string)
-							} else {
-								optionals.ipv6hint += "," + v.(string)
+						if p0["ipv6hint"] != nil {
+							for k, v := range p0["ipv6hint"].([]any) {
+								if k == 0 {
+									optionals.ipv6hint = v.(string)
+								} else {
+									optionals.ipv6hint += "," + v.(string)
+								}
 							}
 						}
-					}
-					if p0["alpn"] != nil {
-						for k, v := range p0["alpn"].([]any) {
-							if k == 0 {
-								optionals.alpn = v.(string)
-							} else {
-								optionals.alpn += "," + v.(string)
+						if p0["alpn"] != nil {
+							for k, v := range p0["alpn"].([]any) {
+								if k == 0 {
+									optionals.alpn = v.(string)
+								} else {
+									optionals.alpn += "," + v.(string)
+								}
 							}
 						}
-					}
-					if p0["mandatory"] != nil {
-						for k, v := range p0["mandatory"].([]any) {
-							if k == 0 {
-								optionals.mandatory = v.(string)
-							} else {
-								optionals.mandatory += "," + v.(string)
+						if p0["mandatory"] != nil {
+							for k, v := range p0["mandatory"].([]any) {
+								if k == 0 {
+									optionals.mandatory = v.(string)
+								} else {
+									optionals.mandatory += "," + v.(string)
+								}
 							}
 						}
+						if p0["no-default-alpn"] != nil {
+							optionals.no_default_alpn = true
+						}
+						if verbose && err == nil {
+							fmt.Printf("origin-svcb ECHConfigList value: %s\n", e0)
+						}
+						if add_to_pile(targetName, targetPort,
+							"origin-svcb", origin_svcb, ec, &optionals) != nil {
+							fmt.Printf("origin-svcb add_to_pile error: %v\n", err)
+						}
 					}
-					if p0["no-default-alpn"] != nil {
+				}
+			}
+		}
+	}
+
+	if outputsource == "all" || outputsource == "retry-configs" {
+		// check if we get some retry-configs
+		retry_configs, err := get_retry_configs(targetName, targetPort,
+			public_name)
+		if verbose && err == nil {
+			fmt.Printf("ECHConfigList value from retry-configs %s\n",
+				base64.StdEncoding.EncodeToString(retry_configs))
+		}
+		if retry_configs != nil && add_to_pile(targetName, targetPort,
+			"retry-configs", nil, retry_configs, nil) != nil {
+			log.Fatalf("add_to_pile error for retry-configs: %v\n", err)
+		}
+	}
+
+	if outputsource == "all" || outputsource == "dns" {
+		// check for HTTPS RRs
+		https_rrs, err := get_https_rrs(targetName, targetPort)
+		if err != nil {
+			if super_verbose {
+				fmt.Printf("get https_rrs fail: %v\n", err)
+			}
+		}
+		// unmarshall and pull out ech= strings
+		var https_rrs_json map[string]any
+		if err = json.Unmarshal(https_rrs, &https_rrs_json); err != nil {
+			if super_verbose {
+				fmt.Printf("unmarshal fail: %v\n", err)
+			}
+		}
+		var dns_configs [][]byte
+		dns_ans := https_rrs_json["Answer"]
+		if super_verbose {
+			fmt.Println("DNS Ans:\n", dns_ans)
+		}
+		var ansarr []any
+		if dns_ans == nil {
+			if verbose {
+				fmt.Println("No real Answer in DNS response\n")
+			}
+			ansarr = nil
+		} else {
+			ansarr = dns_ans.([]any)
+		}
+		for _, val := range ansarr {
+			d0 := (val).(map[string]any)
+			if d0["type"].(float64) == 65 {
+				var tmp_ttl float64
+				var ok bool
+				currentttl := 0
+				tmp_ttl, ok = d0["TTL"].(float64)
+				if ok {
+					currentttl = int(tmp_ttl)
+				}
+				rrval := d0["data"].(string)
+				fvals := strings.Fields(rrval)
+				var optionals ECHOptionals
+				var dec []byte
+				var err error
+				echfound := false
+				optionals.currentttl = currentttl
+				for pi, part := range fvals {
+					if pi == 0 {
+						optionals.priority, err = strconv.Atoi(part)
+						if err != nil {
+							break
+						}
+						continue
+					}
+					if pi == 1 {
+						optionals.target = part
+						continue
+					}
+					if strings.HasPrefix(part, "ech=") {
+						if verbose {
+							fmt.Println("ECHConfigList from HTTPS RR", part[4:])
+						}
+						dec, err = base64.StdEncoding.DecodeString(part[4:])
+						if err == nil {
+							dns_configs = append(dns_configs, dec)
+						}
+						echfound = true
+					}
+					if strings.HasPrefix(part, "ipv4hint=") {
+						optionals.ipv4hint = part[9:]
+					}
+					if strings.HasPrefix(part, "ipv6hint=") {
+						optionals.ipv6hint = part[9:]
+					}
+					if strings.HasPrefix(part, "alpn=") {
+						optionals.alpn = part[5:]
+					}
+					if strings.HasPrefix(part, "mandatory=") {
+						optionals.mandatory = part[10:]
+					}
+					if strings.HasPrefix(part, "no-default-alpn") {
 						optionals.no_default_alpn = true
 					}
-
-					if verbose && err == nil {
-						fmt.Printf("origin-svcb ECHConfigList value: %s\n", e0)
-					}
-					if add_to_pile(targetName, targetPort,
-						"origin-svcb", origin_svcb, ec, &optionals) != nil {
-						fmt.Printf("origin-svcb add_to_pile error: %v\n", err)
-					}
+				}
+				if echfound && add_to_pile(targetName, targetPort,
+					"dns", https_rrs_json, dec, &optionals) != nil {
+					log.Fatalf("add_to_pile error for HTTPS RR configs: %v\n", err)
 				}
 			}
 		}
-	}
-
-	// check if we get some retry-configs
-	retry_configs, err = get_retry_configs(targetName, targetPort,
-		public_name)
-	if verbose && err == nil {
-		fmt.Printf("ECHConfigList value from retry-configs %s\n",
-			base64.StdEncoding.EncodeToString(retry_configs))
-	}
-	if retry_configs != nil && add_to_pile(targetName, targetPort,
-		"retry-configs", nil, retry_configs, nil) != nil {
-		log.Fatalf("add_to_pile error for retry-configs: %v\n", err)
-	}
-
-	// check for HTTPS RRs
-	https_rrs, err := get_https_rrs(targetName, targetPort)
-	if err != nil {
-		if super_verbose {
-			fmt.Printf("get https_rrs fail: %v\n", err)
-		}
-	}
-	// unmarshall and pull out ech= strings
-	var https_rrs_json map[string]any
-	if err = json.Unmarshal(https_rrs, &https_rrs_json); err != nil {
-		if super_verbose {
-			fmt.Printf("unmarshal fail: %v\n", err)
-		}
-	}
-	var dns_configs [][]byte
-	dns_ans := https_rrs_json["Answer"]
-
-	if super_verbose {
-		fmt.Println("DNS Ans:\n", dns_ans)
-	}
-	var ansarr []any
-	if dns_ans == nil {
 		if verbose {
-			fmt.Println("No real Answer in DNS response\n")
-		}
-		ansarr = nil
-	} else {
-		ansarr = dns_ans.([]any)
-	}
-	for _, val := range ansarr {
-		d0 := (val).(map[string]any)
-		if d0["type"].(float64) == 65 {
-			var tmp_ttl float64
-			var ok bool
-			currentttl := 0
-			tmp_ttl, ok = d0["TTL"].(float64)
-			if ok {
-				currentttl = int(tmp_ttl)
+			for i, d := range dns_configs {
+				fmt.Printf("ECHConfigList value %d from DNS: %s\n", i,
+					base64.StdEncoding.EncodeToString(d))
 			}
-			rrval := d0["data"].(string)
-			fvals := strings.Fields(rrval)
-			var optionals ECHOptionals
-			var dec []byte
-			var err error
-			echfound := false
-			optionals.currentttl = currentttl
-			for pi, part := range fvals {
-				if pi == 0 {
-					optionals.priority, err = strconv.Atoi(part)
-					if err != nil {
-						break
-					}
-					continue
-				}
-				if pi == 1 {
-					optionals.target = part
-					continue
-				}
-				if strings.HasPrefix(part, "ech=") {
-					if verbose {
-						fmt.Println("ECHConfigList from HTTPS RR", part[4:])
-					}
-					dec, err = base64.StdEncoding.DecodeString(part[4:])
-					if err == nil {
-						dns_configs = append(dns_configs, dec)
-					}
-					echfound = true
-				}
-				if strings.HasPrefix(part, "ipv4hint=") {
-					optionals.ipv4hint = part[9:]
-				}
-				if strings.HasPrefix(part, "ipv6hint=") {
-					optionals.ipv6hint = part[9:]
-				}
-				if strings.HasPrefix(part, "alpn=") {
-					optionals.alpn = part[5:]
-				}
-				if strings.HasPrefix(part, "mandatory=") {
-					optionals.mandatory = part[10:]
-				}
-				if strings.HasPrefix(part, "no-default-alpn") {
-					optionals.no_default_alpn = true
-				}
-			}
-			if echfound && add_to_pile(targetName, targetPort,
-				"dns", https_rrs_json, dec, &optionals) != nil {
-				log.Fatalf("add_to_pile error for HTTPS RR configs: %v\n", err)
-			}
-		}
-	}
-	if verbose {
-		for i, d := range dns_configs {
-			fmt.Printf("ECHConfigList value %d from DNS: %s\n", i,
-				base64.StdEncoding.EncodeToString(d))
 		}
 	}
 

@@ -34,7 +34,7 @@ $ go build echprobe.go
 $
 ```
 
-## Extended Usage text 
+## Extended Usage text
 
 TODO: build this into the program, when it's done...
 
@@ -50,7 +50,7 @@ use ECH.
 
 `echprobe` takes a DNS name (and optional port) as it's main input and probes
 for ECH support at the web server there, and outputs descriptions of that state
-that aim to help administrators get the right values published in the DNS. 
+that aim to help administrators get the right values published in the DNS.
 
 The data required to enable use of ECH at a web server includes cryptographic
 key(s) and other meta-data (algorithm details etc.) that are usually packaged
@@ -96,7 +96,7 @@ However the desired configuration is likely site-dependent so while probing the
 ECH configurations is helpful, it cannot by itself produce an authoritative
 description of what should be published in the DNS. For example, if the `ipv4hints`
 value should be changed, the tool cannot know what new value is needed. One
-should treat the outputs of this tool as advisory and edit those to meet 
+should treat the outputs of this tool as advisory and edit those to meet
 actual needs.
 
 ### Validation and "Singletons"
@@ -105,7 +105,7 @@ When it finds an ECHConfigList, which might contain multiple ECHConfig values,
 `echprobe` will "explode" the list into what we term a set of "singleton"
 ECHConfig values, each with one public key. The tool then checks whether or not
 ECH works with the server concerned for each singleton, and annotates the
-outputs accordingly. 
+outputs accordingly.
 
 ### Basic Usage
 
