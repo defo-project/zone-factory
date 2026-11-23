@@ -789,14 +789,14 @@ func print_pile(pile []ECHConfigListDets, source string) {
 }
 
 func nsupdate_stanza(ownername string, ttl int, priority int,
-	targ string, ecl []byte) {
-	fmt.Printf("update add %s %d HTTPS %d %s %s\n",
+	targ string, ecl []byte, addedparams string) {
+	fmt.Printf("update add %s %d HTTPS %d %s %s %s\n",
 		ownername, ttl, priority, targ,
-		base64.StdEncoding.EncodeToString(ecl))
+		base64.StdEncoding.EncodeToString(ecl), addedparams)
 }
 
 func pdns_stanza(ownername string, ttl int, priority int,
-	targ string, ecl []byte) {
+	targ string, ecl []byte, addedparams string) {
 	// pdns needs the (I guess) zone name (e.g. 2LD) so we guess
 	// it's the last two labels of the ownername
 	var two_ld string
@@ -811,18 +811,15 @@ func pdns_stanza(ownername string, ttl int, priority int,
 			two_ld = ownername[two_ldind+1:]
 		}
 	}
-	fmt.Printf("pdnsutil rrset replace %s %s HTTPS %d %d %s %s\n",
+	fmt.Printf("pdnsutil rrset replace %s %s HTTPS %d %d %s %s %s\n",
 		two_ld, ownername, ttl, priority, targ,
-		base64.StdEncoding.EncodeToString(ecl))
+		base64.StdEncoding.EncodeToString(ecl), addedparams)
 }
 
 // TODO: handle optionals
 func print_dns_instrs(pile []ECHConfigListDets, otype string,
 	source string, grouping string) {
 	// print dns update commands as directed
-	ttl := 3600
-	priority := 1
-	targetname := "."
 	// we're looking ahead a bit here to get ownername before we
 	// start into loop, it's ok, given name/port are the same in
 	// all cases
@@ -836,24 +833,52 @@ func print_dns_instrs(pile []ECHConfigListDets, otype string,
 		fmt.Printf("update delete HTTPS %s\n", ownername)
 	} // nothing similar needed for pdns afaik (but I may be wrong)
 	for _, p := range pile {
+		ttl := 3600
+		priority := 1
+		targetname := "."
+		addedparamstr := ""
+		if p.source == "origin-svcb" {
+			ttl = p.optionals.regeninterval / 2
+			priority = p.optionals.priority
+		}
+		if p.source == "dns" {
+			ttl = p.optionals.currentttl
+			priority = p.optionals.priority
+		}
+		targetname = p.optionals.target
+		if p.optionals.ipv4hint != "" {
+			addedparamstr += " ipv4hint=" + p.optionals.ipv4hint
+		}
+		if p.optionals.ipv6hint != "" {
+			addedparamstr += " ipv6hint=" + p.optionals.ipv6hint
+		}
+		if p.optionals.alpn != "" {
+			addedparamstr += "alpn=" + p.optionals.alpn
+		}
+		if p.optionals.mandatory != "" {
+			addedparamstr += "mandatory=" + p.optionals.mandatory
+		}
+		if p.optionals.no_default_alpn == true {
+			addedparamstr += "no-default-alon"
+		}
 		if source != "all" && source != p.source {
 			continue
 		}
 		if grouping == "as-found" {
 			if otype == "nsupdate" {
-				nsupdate_stanza(ownername, ttl, priority, targetname, p.list)
+				nsupdate_stanza(ownername, ttl, priority, targetname, p.list, addedparamstr)
 			} else if otype == "pdns" {
-				pdns_stanza(ownername, ttl, priority, targetname, p.list)
+				pdns_stanza(ownername, ttl, priority, targetname, p.list, addedparamstr)
 			}
 		} else {
 			for _, d := range p.details {
 				// do one-by-one
 				if otype == "nsupdate" {
 					nsupdate_stanza(ownername, ttl, priority, targetname,
-						d.singleton)
+						d.singleton, addedparamstr)
 				} else if otype == "pdns" {
 					pdns_stanza(ownername, ttl, priority, targetname,
-						d.singleton)
+						d.singleton, addedparamstr)
 				}
 			}
 		}
