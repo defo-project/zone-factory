@@ -135,35 +135,52 @@ func get_rc(err error) ([]byte, error) {
 	return nil, errors.New("no r-c")
 }
 
+func removeh3fromalpn(s []string) []string {
+	var i int
+	var v string
+	found := false
+	for i, v = range s {
+		if v == "h3" {
+			found = true
+			break
+		}
+	}
+	if found {
+		s[i] = s[len(s)-1]
+		return s[:len(s)-1]
+	} else {
+		return s
+	}
+}
+
 /*
-  Try URL via QUIC, then, if needed, TLS/TCP, return bytes found or error
-  in the optionals we may have:
+	  Try URL via QUIC, then, if needed, TLS/TCP, return bytes found or error
+	  in the optionals we may have:
 
-    target (another name), ipv[46]hint (addresses), alpn
+	    target (another name), ipv[46]hint (addresses), alpn
 
-  	alpn:
-      if alpn set to h3 only try that
-      if alpn set to h2/http1.1 only try that
-    if other alpn, try both, setting the alpn
-    if no alpn, try h3 then tls/tcp with no alpn
+	  	alpn:
+	      if alpn set to h3 only try that
+	      if alpn set to h2/http1.1 only try that
+	    if other alpn, try both, setting the alpn
+	    if no alpn, try h3 then tls/tcp with no alpn
 
-    addresses: we do nothing in parallel, we don't need to be fast
-    candidate addresses:
-        try ipv6hint, then ipv4hint, then target if set
-        if target set only go there
-        if no target just go to origin in URL
+	    addresses: we do nothing in parallel, we don't need to be fast
+	    candidate addresses:
+	        try ipv6hint, then ipv4hint, then target if set
+	        if target set only go there
+	        if no target just go to origin in URL
 
-	we make a list of addresses/names to check, with ipv6hints
-	firsts, then ipv4hints, then the target name (if present)
-	and work our way through those, trying QUIC 1st (if needed),
-	then tls/tcp for each
+		we make a list of addresses/names to check, with ipv6hints
+		firsts, then ipv4hints, then the target name (if present)
+		and work our way through those, trying QUIC 1st (if needed),
+		then tls/tcp for each
 
-    we might wanna modify optionals to say what worked?
+	    we might wanna modify optionals to say what worked?
 
-	we also input whether we want retry-configs as an output in
-	which case an ECH-required error is a success:-)
+		we also input whether we want retry-configs as an output in
+		which case an ECH-required error is a success:-)
 */
-
 func my_quic_then_tcp(echcfg []byte, host string, port string,
 	optionals *ECHOptionals, wantrc bool) (*http.Response, string, error) {
 
@@ -190,13 +207,18 @@ func my_quic_then_tcp(echcfg []byte, host string, port string,
 			}
 		} else {
 			if !optionals.no_default_alpn {
-				// try this as default
-				e_alpn = []string{"h3", "h3", "http/1.1"}
+				// try this as default, for tcp, we'll use h3 for quic
+				e_alpn = []string{"h2", "http/1.1"}
 			}
 		}
+		// take h3 out of e_alpn as we special-case that, and it may break something
+		e_alpn = removeh3fromalpn(e_alpn)
 		// array of ipv6hints 1st, then ipv4hint, then host name
 		if optionals.ipv6hint != "" {
-			e_addrs = strings.Split(optionals.ipv6hint, ",")
+			t_addrs := strings.Split(optionals.ipv6hint, ",")
+			for _, ta := range t_addrs { // golang likes [] bracketed ipv6 addrs
+				e_addrs = append(e_addrs, "["+ta+"]")
+			}
 		}
 		if optionals.ipv4hint != "" {
 			t_addrs := strings.Split(optionals.ipv4hint, ",")
@@ -220,40 +242,37 @@ func my_quic_then_tcp(echcfg []byte, host string, port string,
 		viastr = myaddr + ":" + port
 		if !skip_h3 {
 			if super_verbose {
-				fmt.Printf("trying addr via h3: %s:%s\n", myaddr, port)
+				fmt.Printf("trying via h3: %s\n", viastr)
 			}
 			h3tr := &http3.Transport{
 				TLSClientConfig: &tls.Config{
 					EncryptedClientHelloConfigList: echcfg,
-					NextProtos:                     e_alpn,
+					NextProtos:                     []string{"h3"},
+					ServerName:                     host,
 				},
 				QUICConfig: &quic.Config{},
 				Dial: func(ctx context.Context, addr string, tlsConf *tls.Config, quicConf *quic.Config) (*quic.Conn, error) {
 					// this isn't entirely right but is good enough
 					var pconn net.PacketConn
-					var perr error
-					if strings.Contains(myaddr, ":") { // v6 case
-						laddr, err := net.ResolveUDPAddr("udp6", ":::0")
-						if err != nil {
-							return nil, fmt.Errorf("quic local listener resolve failed: %w", err)
-						}
-						pconn, perr = net.ListenUDP("udp6", laddr)
-						if perr != nil {
-							return nil, fmt.Errorf("quic local listener binding failed: %w", err)
-						}
+					var laddr *net.UDPAddr
+					var err error
+					var raddr string
+					if myaddr[0] == '[' {
+						laddr, err = net.ResolveUDPAddr("udp", "[::]:0")
 					} else {
-						laddr, err := net.ResolveUDPAddr("udp6", ":::0")
-						if err != nil {
-							return nil, fmt.Errorf("quic local listener resolve failed: %w", err)
-						}
-						pconn, perr = net.ListenUDP("udp6", laddr)
-						if perr != nil {
-							return nil, fmt.Errorf("quic local listener binding failed: %w", err)
-						}
+						laddr, err = net.ResolveUDPAddr("udp", "localhost:0")
 					}
-					a, err := net.ResolveUDPAddr("udp", myaddr+":"+port)
 					if err != nil {
-						return nil, err
+						return nil, fmt.Errorf("quic local listener resolve failed: %w", err)
+					}
+					pconn, err = net.ListenUDP("udp", laddr)
+					if err != nil {
+						return nil, fmt.Errorf("quic local listener binding failed: %w", err)
+					}
+					raddr = myaddr + ":" + port
+					a, rerr := net.ResolveUDPAddr("udp", raddr)
+					if rerr != nil {
+						return nil, rerr
 					}
 					return quic.Dial(ctx, pconn, a, tlsConf, quicConf)
 				},
@@ -286,12 +305,20 @@ func my_quic_then_tcp(echcfg []byte, host string, port string,
 				return h3resp, viastr, h3err
 			}
 			if super_verbose {
-				fmt.Printf("h3 request failed for %s: via %s:%s : %v\n", the_url, myaddr, port, h3err)
+				fmt.Printf("h3 request failed for %s: via %s:%s alpn: [h3] : %v\n", the_url, myaddr, port, h3err)
+			}
+			if h3err == nil { // this can be fine - TLS worked, but h3 got a 404
+				if h3resp.StatusCode == 404 {
+					if super_verbose {
+						fmt.Printf("h3 failed but with status code 404, which is fine\n")
+					}
+					return nil, viastr, nil
+				}
 			}
 		}
 
 		if super_verbose {
-			fmt.Printf("trying addr via http/tls/tcp: %v\n", myaddr)
+			fmt.Printf("trying via http/tls/tcp: %v\n", myaddr)
 		}
 		// fallback to trying tls/tcp
 		ttr := &http.Transport{
@@ -300,6 +327,7 @@ func my_quic_then_tcp(echcfg []byte, host string, port string,
 					MinVersion:                     tls.VersionTLS13,
 					EncryptedClientHelloConfigList: echcfg,
 					NextProtos:                     e_alpn,
+					ServerName:                     host,
 				})
 				return conn, err
 			},
@@ -324,11 +352,19 @@ func my_quic_then_tcp(echcfg []byte, host string, port string,
 			}
 		}
 		if terr != nil && super_verbose {
-			fmt.Printf("http/tls/tcp request failed for %s: via %s:%s %v\n", the_url, myaddr, port, terr)
+			fmt.Printf("http/tls/tcp request failed for %s: via %s:%s alpn: %s %v\n", the_url, myaddr, port, e_alpn, terr)
+		}
+		if terr != nil && strings.Contains(terr.Error(), "malformed HTTP") {
+			// that's ok actually, for our purposes, but this is fragile
+			if super_verbose {
+				fmt.Printf("http/tls/tcp request failed in HTTP though, which is fine\n")
+			}
+			return nil, viastr, nil
 		}
 		if terr == nil {
 			if super_verbose {
 				fmt.Printf("http/tls/tcp request worked for %s: via %s:%s\n", the_url, myaddr, port)
+				fmt.Printf("status code: %d\n", tresp.StatusCode)
 			}
 			return tresp, viastr, terr
 		}
@@ -345,7 +381,7 @@ func get_origin_svcb(host string, port string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() // crash here if no n/w at all
 	if super_verbose {
 		fmt.Printf("%s resp status code: %d\n", targetURL, resp.StatusCode)
 	}
