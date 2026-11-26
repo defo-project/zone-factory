@@ -29,16 +29,16 @@ The [echprobe.go](./echprobe.go) script does the above (though in a different
 order). Assuming you have a working and recent golang setup, (I'm on 1.27.3)
 you should be able to build that via:
 
+```bash
+$ go build echprobe.go
+$
+```
+
 The tool takes a sort-of [happy-eyeballs v3](https://datatracker.ietf.org/doc/draft-ietf-happy-happyeyeballs-v3/)
 approach, but without attempting to be speedy, in that it will sequentially
 attempt connections (to acquire or validate ECH configs) in the HEv3 preferred
 order, IPv6 "hints" first, then IPv4 "hints" then based on the relevant DNS
 name's A/AAAA records.
-
-```bash
-$ go build echprobe.go
-$
-```
 
 ## Extended Usage text
 
