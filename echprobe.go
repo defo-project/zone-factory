@@ -826,50 +826,62 @@ func print_pile(pile []ECHConfigListDets, source string) {
 
 func nsupdate_stanza(ownername string, ttl int, priority int,
 	targ string, ecl []byte, addedparams string) {
-	fmt.Printf("update add %s %d HTTPS %d %s %s %s\n",
+	fmt.Printf("update add %s %d HTTPS %d %s ech=%s %s\n",
 		ownername, ttl, priority, targ,
 		base64.StdEncoding.EncodeToString(ecl), addedparams)
 }
 
-func pdns_stanza(ownername string, ttl int, priority int,
-	targ string, ecl []byte, addedparams string) {
-	// pdns needs the (I guess) zone name (e.g. 2LD) so we guess
-	// it's the last two labels of the ownername
-	var two_ld string
-	tldind := strings.LastIndex(ownername, ".")
-	if tldind == -1 {
-		two_ld = "example.com"
-	} else {
-		two_ldind := strings.LastIndex(ownername[0:tldind], ".")
-		if two_ldind == -1 {
-			two_ld = ownername
-		} else {
-			two_ld = ownername[two_ldind+1:]
-		}
-	}
-	fmt.Printf("pdnsutil rrset replace %s %s HTTPS %d %d %s %s %s\n",
-		two_ld, ownername, ttl, priority, targ,
-		base64.StdEncoding.EncodeToString(ecl), addedparams)
+func pdns_stanza(priority int, targ string, ecl []byte, addedparams string) {
+	fmt.Printf("\t\" %d %s ech=%s %s \" \\\n",
+		priority, targ, base64.StdEncoding.EncodeToString(ecl), addedparams)
 }
 
-// TODO: handle optionals
 func print_dns_instrs(pile []ECHConfigListDets, otype string,
-	source string, grouping string) {
+	source string, grouping string, zonestr string) {
 	// print dns update commands as directed
 	// we're looking ahead a bit here to get ownername before we
 	// start into loop, it's ok, given name/port are the same in
 	// all cases
 	var ownername string
-	if thepile[0].port == "443" {
-		ownername = thepile[0].name
+	if pile[0].port == "443" {
+		ownername = pile[0].name
 	} else {
-		ownername = "_" + thepile[0].port + "_https." + thepile[0].name
+		ownername = "_" + pile[0].port + "_https." + pile[0].name
 	}
+	// similarly for ttl, though it may change later
+	ttl := 3600
+	if pile[0].source == "origin-svcb" {
+		ttl = pile[0].optionals.regeninterval / 2
+	}
+	if pile[0].source == "dns" {
+		ttl = pile[0].optionals.currentttl
+	}
+	fmt.Printf("source: %s\n", source)
 	if otype == "nsupdate" {
 		fmt.Printf("update delete HTTPS %s\n", ownername)
-	} // nothing similar needed for pdns afaik (but I may be wrong)
+	} 
+	if otype == "pdns" {
+		// pdns needs the (I guess) zone name (e.g. 2LD) so if we have
+		// nothing else, we guess it's the last two labels of the ownername
+		var two_ld string
+		if zonestr != "" {
+			two_ld = zonestr
+		} else {
+			tldind := strings.LastIndex(ownername, ".")
+			if tldind == -1 {
+				two_ld = "example.com"
+			} else {
+				two_ldind := strings.LastIndex(ownername[0:tldind], ".")
+				if two_ldind == -1 {
+					two_ld = ownername
+				} else {
+					two_ld = ownername[two_ldind+1:]
+				}
+			}
+		}
+		fmt.Printf("pdnsutil rrset replace %s %s HTTPS %d \\\n", two_ld, ownername, ttl)
+	}
 	for _, p := range pile {
-		ttl := 3600
 		priority := 1
 		targetname := "."
 		addedparamstr := ""
@@ -881,7 +893,9 @@ func print_dns_instrs(pile []ECHConfigListDets, otype string,
 			ttl = p.optionals.currentttl
 			priority = p.optionals.priority
 		}
-		targetname = p.optionals.target
+		if p.optionals.target != "" {
+			targetname = p.optionals.target
+		}
 		if p.optionals.ipv4hint != "" {
 			addedparamstr += " ipv4hint=" + p.optionals.ipv4hint
 		}
@@ -904,7 +918,7 @@ func print_dns_instrs(pile []ECHConfigListDets, otype string,
 			if otype == "nsupdate" {
 				nsupdate_stanza(ownername, ttl, priority, targetname, p.list, addedparamstr)
 			} else if otype == "pdns" {
-				pdns_stanza(ownername, ttl, priority, targetname, p.list, addedparamstr)
+				pdns_stanza(priority, targetname, p.list, addedparamstr)
 			}
 		} else {
 			for _, d := range p.details {
@@ -913,8 +927,7 @@ func print_dns_instrs(pile []ECHConfigListDets, otype string,
 					nsupdate_stanza(ownername, ttl, priority, targetname,
 						d.singleton, addedparamstr)
 				} else if otype == "pdns" {
-					pdns_stanza(ownername, ttl, priority, targetname,
-						d.singleton, addedparamstr)
+					pdns_stanza(priority, targetname, d.singleton, addedparamstr)
 				}
 			}
 		}
@@ -928,6 +941,7 @@ func main() {
 	var outputsource string
 	var outputgrouping string
 	var timeoutstr string
+	var zonestr string
 	public_name := ""
 	total_checked_good = 0
 
@@ -944,6 +958,7 @@ func main() {
 	flag.BoolVar(&verbose, "v", false, "verbosity")
 	flag.BoolVar(&super_verbose, "vv", false, "lots of verbosity")
 	flag.StringVar(&timeoutstr, "t", "100ms", "Timeout for connections in ms (default 100)")
+	flag.StringVar(&zonestr, "z", "", "Zone name for PowerDNS output format")
 	flag.Parse()
 
 	if super_verbose {
@@ -1179,6 +1194,6 @@ func main() {
 		print_pile(thepile, outputsource)
 	}
 	if outputtype == "nsupdate" || outputtype == "pdns" {
-		print_dns_instrs(thepile, outputtype, outputsource, outputgrouping)
+		print_dns_instrs(thepile, outputtype, outputsource, outputgrouping, zonestr)
 	}
 }
