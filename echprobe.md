@@ -42,8 +42,6 @@ $
 
 ## Extended Usage text
 
-TODO: build this into the program, when it's done...
-
 If you're using this tool, you probably already know what Encrypted Client
 Hello ([ECH](https://datatracker.ietf.org/doc/rfc9849/)) is and are interested
 in deploying that for some web server, or want to check what's deployed. There
