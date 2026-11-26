@@ -61,7 +61,7 @@ key(s) and other meta-data (algorithm details etc.) that are usually packaged
 in an `ECHConfig`. As more than one set of options may be supported at a given
 web server, lists of those values are what is typically distributed to clients
 in an `ECHConfigList` structure that can be published in the DNS as a (base64
-encoded value) in an HTTP resource record (RR) for the relevant domain name.
+encoded value) in an HTTPS resource record (RR) for the relevant domain name.
 Browsers will attempt ECH if they see a usable ECHConfigList in the DNS for
 the web server concerned.
 
@@ -75,15 +75,16 @@ that a client could use that value in a subsequent connection-attempt to use
 ECH with that server.  The set of values provided in retry-configs may be a
 subset of the set of ECHConfig values that will work with that server (at that
 time). If a client attempts to use ECH with a server, but uses the wrong key,
-then it is highly likely that the server will return the current set of
+then it is highly likely that the server will return a current set of
 retry-configs that work with the server.
 
 - There is also an
   [Internet-draft](https://datatracker.ietf.org/doc/html/draft-ietf-tls-wkech)
 that defines a method for a web server (administrator) to publish the set of
 ECHConfig values (using a well-known URL) that they would like to see published
-in the DNS so that browser can make use of ECH. That is very very far from
-widely deployed, (currently, only by the [DEfO project](https://defo.ie) but is
+in the DNS so that browsers can make use of ECH. That is very very far from
+widely deployed, (currently, only by the [DEfO project](https://defo.ie) and
+one other deployment) but is
 another potential source of ECH information.
 
 Considering those three sets of (possibly conflicting) information, we
@@ -106,10 +107,10 @@ actual needs.
 ### Validation and "Singletons"
 
 When it finds an ECHConfigList, which might contain multiple ECHConfig values,
-`echprobe` will "explode" the list into what we term a set of "singleton"
-ECHConfig values, each with one public key. The tool then checks whether or not
-ECH works with the server concerned for each singleton, and annotates the
-outputs accordingly.
+(each of which has one ECH public key), `echprobe` will "explode" the list into
+what we term a set of "singleton" ECHConfig values, each with one public key.
+The tool then checks whether or not ECH works with the server concerned for
+each singleton, and annotates the outputs accordingly.
 
 ### Basic Usage
 
@@ -367,7 +368,7 @@ update add facebook.com 3600 HTTPS 1  ADz+DQA4AgAgACD+3t6VFcOw4TgdcWhjku+MWmbhq5
 That last example shows up one of the limits of `echprobe` - if one
 wanted to publish HTTPS RRs with those values, then it seems likely
 one might want to use different priorities (all "1" in the above) and
-perhaps a different TTL setting. So the DNS tool stanzas are likely
+perhaps a different TTL setting. So the DNS tool stanzas are highly likely
 to need editing before being used to update an actual authoritative
 DNS server.
 
