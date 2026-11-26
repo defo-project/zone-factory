@@ -36,9 +36,9 @@ $
 
 The tool takes a sort-of [happy-eyeballs v3](https://datatracker.ietf.org/doc/draft-ietf-happy-happyeyeballs-v3/)
 approach, but without attempting to be speedy, in that it will sequentially
-attempt connections (to acquire or validate ECH configs) in the HEv3 preferred
-order, IPv6 "hints" first, then IPv4 "hints" then based on the relevant DNS
-name's A/AAAA records.
+attempt QUIC and/or HTTP/TLS connections (to acquire or validate ECH configs)
+in the HEv3 preferred order, IPv6 "hints" first, then IPv4 "hints" then based
+on the relevant DNS name's A/AAAA records.
 
 ## Extended Usage text
 
