@@ -934,7 +934,7 @@ func main() {
 	// command line args
 	flag.StringVar(&targetName, "n", "defo.ie", "DNS name to probe")
 	flag.StringVar(&targetPort, "p", "443", "service port to probe")
-	flag.StringVar(&public_name, "pn", "", "ECH public name")
+	flag.StringVar(&public_name, "pn", "", "ECH public name to try when fetching retry-configs")
 	flag.StringVar(&doh_url, "doh", "https://cloudflare-dns.com/dns-query",
 		"DoH URL")
 	flag.StringVar(&outputtype, "o", "summary", "Output type desired")

@@ -372,6 +372,21 @@ perhaps a different TTL setting. So the DNS tool stanzas are highly likely
 to need editing before being used to update an actual authoritative
 DNS server.
 
+If an ECH deployment is strict about only returning retry-configs if the
+correct public-name is used, then the `-pn` input can help, for example:
+
+```bash
+$ ./echprobe -pn cloudflare-ech.com -n rte.ie
+List 0, source retry-configs:
+	name: rte.ie
+	List: AEX+DQBBpwAgACC5nKlXegJ5fciFLZXt08GnpT0B4DTEoQKnDAA0cX7LOgAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=
+		Singleton 0
+		Version: 0xfe0d, config_id: 0xa7, checked: true, via: rte.ie:443
+		public_name: cloudflare-ech.com
+		HPKE suites: DHKEM(X25519, HKDF-SHA256)/HKDF-SHA256/AES-128-GCM
+		Singleton: AEX+DQBBpwAgACC5nKlXegJ5fciFLZXt08GnpT0B4DTEoQKnDAA0cX7LOgAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=
+```
+
 ## Current Status
 
 As of 2026-11-25, the tool seems to work, but needs significant
