@@ -334,35 +334,50 @@ produce stanzas usable with the PowerDNS `pdns-util` command.
 
 ```bash
 $ ./echprobe -n defo.ie -s retry-configs -o nsupdate
-update delete HTTPS defo.ie
-update add defo.ie 3600 HTTPS 1  AED+DQA8VAAgACC+ZGfLtlRJFwe1vDei02LENiYgU3U39hFfDGv+7B6XEAAEAAEAAQANY292ZXIuZGVmby5pZQAA
+source: retry-configs
+
+    update delete HTTPS defo.ie
+    update add defo.ie 3600 HTTPS 1 . ech=AED+DQA8WQAgACAY8hQSX96hkIqyW3vUoobgfNpzXDoV98TuUIu5dIiuYwAEAAEAAQANY292ZXIuZGVmby5pZQAA 
+
 ```
 
 or...
 
 ```bash
-$ ./echprobe -n defo.ie -s retry-configs -o pdns
-pdnsutil rrset replace defo.ie defo.ie HTTPS 3600 1  AED+DQA8VAAgACC+ZGfLtlRJFwe1vDei02LENiYgU3U39hFfDGv+7B6XEAAEAAEAAQANY292ZXIuZGVmby5pZQAA 
+$ ./echprobe -n defo.ie -s dns -o pdns
+
+source: dns
+
+    pdnsutil rrset replace defo.ie defo.ie HTTPS 66 \
+        "1 . ech=AMD+DQA8KAAgACAmf4PeSNzYTbMBYFEVqib6HD5n24UPH38+h5j0Z8srNgAEAAEAAQANY292ZXIuZGVmby5pZQAA/g0APL4AIAAgbQytT374fOjR8scsgXlsfXmYlt6P4Ges8y69zJWXUzwABAABAAEADWNvdmVyLmRlZm8uaWUAAP4NADy8ACAAIBfKPdlO6xwtWHkuo8xvKfkl5oELoj/a0EcEw/TmTDkrAAQAAQABAA1jb3Zlci5kZWZvLmllAAA=  ipv4hint=213.108.108.101 ipv6hint=2a00:c6c0:0:116:5::10"
 ```
+
+The pdnsutil output in the above has two instances of `defo.ie` - the first is
+the zone name in the PowerDNS configuration, the second is the ownername being
+modified. If the ownername has more that two labels (e.g. `test.defo.ie`) then
+the default zone name chosen will be the rightmost two labels (e.g. `defo.ie`),
+but that choice can be overridden via the command line `-z` option. 
 
 For either bind or pdns, you can also choose to group the ECHConfigLists
 presented as they were discovered (`-g as-found`) or as singletons (`-g
 one-by-one`), for example:
 
 ```bash
-$ ./echprobe -s retry-configs -o nsupdate -n facebook.com -g one-by-one
-update delete HTTPS facebook.com
-update add facebook.com 3600 HTTPS 1  AD/+DQA7AAAgACBKTLEeFRxf7iC7wIdiRa2umX+yPtIeglGqBP7tfrgFdwAEAAEAAWQMZmFjZWJvb2suY29tAAA= 
-update add facebook.com 3600 HTTPS 1  AEX+DQBBBQAgACCEpikd9ey1gwO/XpN3lcToJ/wzH7QlYfY3DZVicyiPAgAEAAEAATISZ3JhcGguZmFjZWJvb2suY29tAAA= 
-update add facebook.com 3600 HTTPS 1  AEj+DQBECAAgACBoagCiXnMAHTpss2UZ+fW/N/wRflRdwnBsica6bun8NgAEAAEAATIVc2NvbnRlbnQueHguZmJjZG4ubmV0AAA= 
-update add facebook.com 3600 HTTPS 1  AEX+DQBBCQAgACDP0okJjRYtkh5AWEPcjqA1Z9xWn2JkE49qj7n+gwY3GgAEAAEAATISdmlkZW8ueHguZmJjZG4ubmV0AAA= 
-update add facebook.com 3600 HTTPS 1  AEj+DQBEAQAgACAdd+scUi0IYFsXnUIU7ko2Nd9+F8M26pAGZVpz/KrWPgAEAAEAAWQVZWNoLXB1YmxpYy5hdG1ldGEuY29tAAA= 
-update add facebook.com 3600 HTTPS 1  AEX+DQBBAwAgACC2SuomaKhQlkusWMQiUkCjuz8+0WR6jyC0DIsANT6gAQAEAAEAAWQSdmlkZW8ueHguZmJjZG4ubmV0AAA= 
-update add facebook.com 3600 HTTPS 1  AEz+DQBIBwAgACBH8Vs19gc3DIDfTChp3+G6H71KivZY4dtweKazCugIQgAEAAEAATIZdmlkZW8tbGF4My0yLnh4LmZiY2RuLm5ldAAA 
-update add facebook.com 3600 HTTPS 1  AE/+DQBLBgAgACC2LnhdoPxWHAYSbGMalrFSS4DPdWalBIw4VJGBI9yFHQAEAAEAATIcc2NvbnRlbnQtbGF4My0yLnh4LmZiY2RuLm5ldAAA 
-update add facebook.com 3600 HTTPS 1  AEz+DQBIBAAgACDUEvnHlU1q8/Z33wTNet/p76WfZOReViudbeAwBht0XgAEAAEAAWQZdmlkZW8tbGF4My0yLnh4LmZiY2RuLm5ldAAA 
-update add facebook.com 3600 HTTPS 1  ADz+DQA4AgAgACD+3t6VFcOw4TgdcWhjku+MWmbhq5VMyaPg3THh0iZNSAAEAAEAAWQJZmJjZG4ubmV0AAA= 
+$ ./echprobe -s retry-configs -o pdns -n facebook.com -g one-by-one
 
+source: retry-configs
+
+    pdnsutil rrset replace facebook.com facebook.com HTTPS 3600 \
+        "1 . ech=AD/+DQA7AAAgACBKTLEeFRxf7iC7wIdiRa2umX+yPtIeglGqBP7tfrgFdwAEAAEAAWQMZmFjZWJvb2suY29tAAA=" \
+        "1 . ech=AEX+DQBBBQAgACCEpikd9ey1gwO/XpN3lcToJ/wzH7QlYfY3DZVicyiPAgAEAAEAATISZ3JhcGguZmFjZWJvb2suY29tAAA=" \
+        "1 . ech=AEj+DQBECAAgACBoagCiXnMAHTpss2UZ+fW/N/wRflRdwnBsica6bun8NgAEAAEAATIVc2NvbnRlbnQueHguZmJjZG4ubmV0AAA=" \
+        "1 . ech=AEX+DQBBCQAgACDP0okJjRYtkh5AWEPcjqA1Z9xWn2JkE49qj7n+gwY3GgAEAAEAATISdmlkZW8ueHguZmJjZG4ubmV0AAA=" \
+        "1 . ech=AEj+DQBEAQAgACAdd+scUi0IYFsXnUIU7ko2Nd9+F8M26pAGZVpz/KrWPgAEAAEAAWQVZWNoLXB1YmxpYy5hdG1ldGEuY29tAAA=" \
+        "1 . ech=AEX+DQBBAwAgACC2SuomaKhQlkusWMQiUkCjuz8+0WR6jyC0DIsANT6gAQAEAAEAAWQSdmlkZW8ueHguZmJjZG4ubmV0AAA=" \
+        "1 . ech=AEz+DQBIBwAgACBH8Vs19gc3DIDfTChp3+G6H71KivZY4dtweKazCugIQgAEAAEAATIZdmlkZW8tbGF4My0yLnh4LmZiY2RuLm5ldAAA" \
+        "1 . ech=AE/+DQBLBgAgACC2LnhdoPxWHAYSbGMalrFSS4DPdWalBIw4VJGBI9yFHQAEAAEAATIcc2NvbnRlbnQtbGF4My0yLnh4LmZiY2RuLm5ldAAA" \
+        "1 . ech=AEz+DQBIBAAgACDUEvnHlU1q8/Z33wTNet/p76WfZOReViudbeAwBht0XgAEAAEAAWQZdmlkZW8tbGF4My0yLnh4LmZiY2RuLm5ldAAA" \
+        "1 . ech=ADz+DQA4AgAgACD+3t6VFcOw4TgdcWhjku+MWmbhq5VMyaPg3THh0iZNSAAEAAEAAWQJZmJjZG4ubmV0AAA="
 ```
 
 That last example shows up one of the limits of `echprobe` - if one
@@ -389,6 +404,6 @@ List 0, source retry-configs:
 
 ## Current Status
 
-As of 2026-11-25, the tool seems to work, but needs significant
+As of 2026-11-27, the tool seems to work, but needs significant
 testing, so don't depend on it being correct for now at least.
 
