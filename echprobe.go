@@ -278,6 +278,9 @@ func my_quic_then_tcp(echcfg []byte, host string, port string,
 					return quic.Dial(ctx, pconn, a, tlsConf, quicConf)
 				},
 			}
+			if h3tr == nil {
+				return nil, viastr, nil
+			}
 			defer h3tr.Close()
 			h3client := &http.Client{
 				Timeout:   duration,
@@ -382,7 +385,10 @@ func get_origin_svcb(host string, port string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	defer resp.Body.Close() // crash here if no n/w at all
+	if resp == nil { // happens if no A/AAAA RR but NOERROR rather than NXDOMAIN
+		return nil, err
+	}
+	defer resp.Body.Close()
 	if super_verbose {
 		fmt.Printf("%s resp status code: %d\n", targetURL, resp.StatusCode)
 	}
@@ -605,7 +611,10 @@ func get_https_rrs(host string, port string) ([]byte, error) {
 		},
 		URL: url,
 	})
-	if resp.StatusCode != 200 || err != nil {
+	if err != nil || resp.StatusCode != 200 {
+		return nil, err
+	}
+	if resp == nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
